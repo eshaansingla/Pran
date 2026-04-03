@@ -1,0 +1,41 @@
+# Claude Code internal
+.claude/
+CLAUDE.md
+
+# Data — never commit raw or processed patient data
+data/raw/
+data/processed/
+data/*.csv
+
+# Trained models (large binaries)
+models/
+
+# Logs
+logs/
+
+# Results (regenerable)
+results/
+
+# Firmware generated header (regenerable)
+firmware/esp32_icp_monitor/xgboost_model.h
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets — NEVER commit credentials
+.env
+*.env
