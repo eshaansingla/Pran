@@ -2,24 +2,23 @@
 .claude/
 CLAUDE.md
 
-# Data — never commit raw or processed patient data
+# ── Data — never commit raw or processed patient data ──────────────────────
 data/raw/
 data/processed/
 data/*.csv
 
-# Trained models (large binaries)
+# ── Trained models (large binaries) ────────────────────────────────────────
 models/
 
-# Logs
-logs/
-
-# Results (regenerable)
+# ── Results (regenerable from scripts) ─────────────────────────────────────
 results/
 
-# Firmware generated header (regenerable)
-firmware/esp32_icp_monitor/xgboost_model.h
+# ── Web app — build artifacts and dependencies ──────────────────────────────
+icp-monitor-web/frontend/node_modules/
+icp-monitor-web/frontend/dist/
+icp-monitor-web/backend/__pycache__/
 
-# Python
+# ── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -27,15 +26,21 @@ __pycache__/
 venv/
 env/
 
-# IDE
+# ── Firmware generated header (regenerable) ─────────────────────────────────
+firmware/esp32_icp_monitor/xgboost_model.h
+
+# ── Logs ────────────────────────────────────────────────────────────────────
+logs/
+
+# ── IDE ─────────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
 *.swp
 
-# OS
+# ── OS ──────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# Secrets — NEVER commit credentials
+# ── Secrets — NEVER commit credentials ──────────────────────────────────────
 .env
 *.env
