@@ -7,19 +7,19 @@ interface Props {
   trend: TrendPoint[]
 }
 
-interface CriticalEpisode {
+interface AbnormalEpisode {
   start: number
   end: number
   duration: number
 }
 
-function findCriticalEpisodes(trend: TrendPoint[]): CriticalEpisode[] {
-  const episodes: CriticalEpisode[] = []
+function findAbnormalEpisodes(trend: TrendPoint[]): AbnormalEpisode[] {
+  const episodes: AbnormalEpisode[] = []
   let start: number | null = null
   for (let i = 0; i < trend.length; i++) {
-    if (trend[i].class === 2 && start === null) {
+    if (trend[i].class === 1 && start === null) {
       start = trend[i].windowId
-    } else if (trend[i].class !== 2 && start !== null) {
+    } else if (trend[i].class !== 1 && start !== null) {
       episodes.push({ start, end: trend[i - 1].windowId, duration: trend[i - 1].windowId - start + 1 })
       start = null
     }
@@ -31,10 +31,9 @@ function findCriticalEpisodes(trend: TrendPoint[]): CriticalEpisode[] {
   return episodes
 }
 
-const PIE_DATA_KEYS: Array<{ key: keyof BatchSummary; label: string; cls: 0 | 1 | 2 }> = [
+const PIE_DATA_KEYS: Array<{ key: keyof BatchSummary; label: string; cls: 0 | 1 }> = [
   { key: 'normal',   label: 'Normal',   cls: 0 },
-  { key: 'elevated', label: 'Elevated', cls: 1 },
-  { key: 'critical', label: 'Critical', cls: 2 },
+  { key: 'abnormal', label: 'Abnormal', cls: 1 },
 ]
 
 export default function SessionSummary({ summary, trend }: Props) {
@@ -42,7 +41,7 @@ export default function SessionSummary({ summary, trend }: Props) {
     .map(d => ({ name: d.label, value: summary[d.key] as number, cls: d.cls }))
     .filter(d => d.value > 0)
 
-  const episodes = findCriticalEpisodes(trend)
+  const episodes = findAbnormalEpisodes(trend)
 
   return (
     <div className="space-y-5">
@@ -51,10 +50,10 @@ export default function SessionSummary({ summary, trend }: Props) {
       </h3>
 
       {/* Stats row */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 gap-3">
         {PIE_DATA_KEYS.map(({ key, label, cls }) => {
-          const count = summary[key] as number
-          const pct = summary[`${key}_pct` as keyof BatchSummary] as number
+          const count = summary[key as 'normal' | 'abnormal'] as number
+          const pct = summary[`${key}_pct` as 'normal_pct' | 'abnormal_pct'] as number
           return (
             <div
               key={key}
@@ -103,7 +102,7 @@ export default function SessionSummary({ summary, trend }: Props) {
             Total analysed: {summary.total.toLocaleString()} windows
           </p>
           {PIE_DATA_KEYS.map(({ key, label, cls }) => {
-            const pct = summary[`${key}_pct` as keyof BatchSummary] as number
+            const pct = summary[`${key}_pct` as 'normal_pct' | 'abnormal_pct'] as number
             return (
               <div key={key} className="flex items-center gap-2">
                 <span
@@ -120,11 +119,11 @@ export default function SessionSummary({ summary, trend }: Props) {
         </div>
       </div>
 
-      {/* Critical episodes */}
+      {/* Abnormal episodes */}
       {episodes.length > 0 && (
         <div className="space-y-2">
           <h4 className="text-xs font-semibold text-clinical-critical uppercase tracking-wide">
-            Critical Episodes ({episodes.length})
+            Abnormal Episodes ({episodes.length})
           </h4>
           <div className="space-y-1.5 max-h-40 overflow-y-auto">
             {episodes.map((ep, i) => (

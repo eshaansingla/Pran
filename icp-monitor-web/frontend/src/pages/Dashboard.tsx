@@ -17,7 +17,7 @@ export default function Dashboard() {
   const [current, setCurrent]       = useState<(WindowPrediction & { timestamp: string }) | null>(null)
   const [currentIdx, setCurrentIdx] = useState(0)
   const [trend, setTrend]           = useState<TrendPoint[]>([])
-  const [hasCritical, setHasCritical] = useState(false)
+  const [hasAbnormal, setHasAbnormal] = useState(false)
 
   const handleFile = useCallback(async (file: File) => {
     setLoading(true)
@@ -25,7 +25,7 @@ export default function Dashboard() {
     setResult(null)
     setTrend([])
     setCurrent(null)
-    setHasCritical(false)
+    setHasAbnormal(false)
     try {
       const res = await predictBatch(file)
       setResult(res)
@@ -40,7 +40,7 @@ export default function Dashboard() {
         label: p.class_name,
       }))
       setTrend(points)
-      setHasCritical(res.summary.critical > 0)
+      setHasAbnormal(res.summary.abnormal > 0)
 
       // Show first window by default
       if (res.predictions.length > 0) {
@@ -61,7 +61,7 @@ export default function Dashboard() {
     setErrors([])
     setTrend([])
     setCurrent(null)
-    setHasCritical(false)
+    setHasAbnormal(false)
     setCurrentIdx(0)
   }
 
@@ -86,17 +86,17 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-5">
-      {/* Critical alert banner */}
-      {hasCritical && (
+      {/* Abnormal alert banner */}
+      {hasAbnormal && (
         <div
           role="alert"
           className="flex items-center gap-3 px-4 py-3 bg-red-600 text-white rounded-lg shadow-sm"
         >
           <AlertTriangle size={18} className="flex-shrink-0" />
           <p className="text-sm font-semibold">
-            Critical ICP detected in this session — {result?.summary.critical} window
-            {(result?.summary.critical ?? 0) > 1 ? 's' : ''} ({result?.summary.critical_pct}%).
-            Immediate clinical review indicated.
+            Abnormal ICP detected in this session — {result?.summary.abnormal} window
+            {(result?.summary.abnormal ?? 0) > 1 ? 's' : ''} ({result?.summary.abnormal_pct}%).
+            Clinical review indicated.
           </p>
         </div>
       )}

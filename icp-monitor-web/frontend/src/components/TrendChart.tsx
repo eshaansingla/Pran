@@ -24,7 +24,7 @@ function CustomTooltip({ active, payload }: {
 }) {
   if (!active || !payload?.[0]) return null
   const p = payload[0].payload
-  const label = ['Normal', 'Elevated', 'Critical'][p.class]
+  const label = ['Normal', 'Abnormal'][p.class]
   const color = CLASS_COLORS[p.class]
   return (
     <div className="bg-white border border-clinical-border rounded shadow-sm px-3 py-2 text-xs space-y-1">
@@ -40,8 +40,8 @@ function CustomTooltip({ active, payload }: {
   )
 }
 
-const Y_TICKS = [0, 1, 2]
-const Y_LABELS: Record<number, string> = { 0: 'Normal', 1: 'Elevated', 2: 'Critical' }
+const Y_TICKS = [0, 1]
+const Y_LABELS: Record<number, string> = { 0: 'Normal', 1: 'Abnormal' }
 
 export default function TrendChart({ data }: Props) {
   if (data.length === 0) {
@@ -63,9 +63,8 @@ export default function TrendChart({ data }: Props) {
       <ResponsiveContainer width="100%" height={220}>
         <LineChart data={visible} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
           {/* Background zones */}
-          <ReferenceArea y1={-0.5} y2={0.5} fill="#ECFDF5" fillOpacity={0.6} />
-          <ReferenceArea y1={0.5}  y2={1.5} fill="#FFFBEB" fillOpacity={0.6} />
-          <ReferenceArea y1={1.5}  y2={2.5} fill="#FEF2F2" fillOpacity={0.6} />
+          <ReferenceArea y1={-0.2} y2={0.5} fill="#ECFDF5" fillOpacity={0.6} />
+          <ReferenceArea y1={0.5}  y2={1.2} fill="#FEF2F2" fillOpacity={0.6} />
 
           <CartesianGrid strokeDasharray="3 3" stroke="#E2E8F0" vertical={false} />
 
@@ -77,7 +76,7 @@ export default function TrendChart({ data }: Props) {
             axisLine={{ stroke: '#E2E8F0' }}
           />
           <YAxis
-            domain={[-0.2, 2.2]}
+            domain={[-0.2, 1.2]}
             ticks={Y_TICKS}
             tickFormatter={v => Y_LABELS[v] ?? ''}
             tick={{ fontSize: 10, fill: '#718096' }}
@@ -86,9 +85,8 @@ export default function TrendChart({ data }: Props) {
             width={58}
           />
 
-          {/* Boundary lines */}
-          <ReferenceLine y={0.5} stroke="#059669" strokeDasharray="4 3" strokeOpacity={0.5} />
-          <ReferenceLine y={1.5} stroke="#D97706" strokeDasharray="4 3" strokeOpacity={0.5} />
+          {/* Boundary line */}
+          <ReferenceLine y={0.5} stroke="#DC2626" strokeDasharray="4 3" strokeOpacity={0.5} />
 
           <Tooltip content={<CustomTooltip />} />
 

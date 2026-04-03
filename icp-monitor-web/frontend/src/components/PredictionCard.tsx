@@ -1,4 +1,4 @@
-import { AlertTriangle, CheckCircle, Clock, TrendingUp } from 'lucide-react'
+import { AlertTriangle, CheckCircle, Clock } from 'lucide-react'
 import type { WindowPrediction } from '../types'
 import {
   CLASS_BG, CLASS_BORDER, CLASS_COLORS, CLASS_LABELS, CLASS_TEXT,
@@ -12,13 +12,11 @@ interface Props {
 
 const ICP_RANGES: Record<number, string> = {
   0: '< 15 mmHg',
-  1: '15 – 20 mmHg',
-  2: '\u2265 20 mmHg',
+  1: '>= 15 mmHg',
 }
 
 function classIcon(cls: number, size = 20) {
   if (cls === 0) return <CheckCircle size={size} aria-hidden="true" />
-  if (cls === 1) return <TrendingUp size={size} aria-hidden="true" />
   return <AlertTriangle size={size} aria-hidden="true" />
 }
 
@@ -60,7 +58,7 @@ export default function PredictionCard({ prediction, windowIndex }: Props) {
         <span style={{ color }}>{classIcon(cls, 28)}</span>
         <div>
           <p className="text-xl font-bold leading-tight" style={{ color: text }}>
-            {cls === 2 ? 'CRITICAL ICP' : cls === 1 ? 'ELEVATED ICP' : 'Normal ICP'}
+            {cls === 0 ? 'Normal ICP' : 'ABNORMAL ICP'}
           </p>
           <p className="text-xs mt-0.5" style={{ color: text }}>
             Estimated range: {ICP_RANGES[cls]}
@@ -92,7 +90,7 @@ export default function PredictionCard({ prediction, windowIndex }: Props) {
                 className="h-full rounded-full transition-all duration-300"
                 style={{
                   width: `${(p * 100).toFixed(1)}%`,
-                  backgroundColor: CLASS_COLORS[i as 0|1|2],
+                  backgroundColor: CLASS_COLORS[i as 0|1],
                   opacity: i === cls ? 1 : 0.45,
                 }}
                 role="progressbar"

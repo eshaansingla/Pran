@@ -1,25 +1,22 @@
 import type { ICPClass } from '../types'
 
-export const CLASS_LABELS = ['Normal', 'Elevated', 'Critical'] as const
+export const CLASS_LABELS = ['Normal', 'Abnormal'] as const
+
 export const CLASS_COLORS: Record<ICPClass, string> = {
-  0: '#059669',
-  1: '#D97706',
-  2: '#DC2626',
+  0: '#059669',   // green — Normal
+  1: '#DC2626',   // red   — Abnormal
 }
 export const CLASS_BG: Record<ICPClass, string> = {
   0: '#D1FAE5',
-  1: '#FEF3C7',
-  2: '#FEE2E2',
+  1: '#FEE2E2',
 }
 export const CLASS_TEXT: Record<ICPClass, string> = {
   0: '#065F46',
-  1: '#92400E',
-  2: '#991B1B',
+  1: '#991B1B',
 }
 export const CLASS_BORDER: Record<ICPClass, string> = {
   0: '#A7F3D0',
-  1: '#FDE68A',
-  2: '#FECACA',
+  1: '#FECACA',
 }
 
 export function fmtTimestamp(iso: string): string {

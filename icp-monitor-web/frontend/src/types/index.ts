@@ -1,5 +1,5 @@
-export type ICPClass = 0 | 1 | 2
-export type ICPClassName = 'Normal' | 'Elevated' | 'Critical'
+export type ICPClass = 0 | 1
+export type ICPClassName = 'Normal' | 'Abnormal'
 
 export interface FeatureContribution {
   name: string
@@ -13,7 +13,8 @@ export interface FeatureContribution {
 export interface SinglePrediction {
   class: ICPClass
   class_name: ICPClassName
-  probabilities: [number, number, number]
+  probability: number
+  probabilities: [number, number]
   confidence: number
   timestamp: string
   top_features: FeatureContribution[]
@@ -23,18 +24,17 @@ export interface WindowPrediction {
   window_id: number
   class: ICPClass
   class_name: ICPClassName
-  probabilities: [number, number, number]
+  probability: number
+  probabilities: [number, number]
   confidence: number
 }
 
 export interface BatchSummary {
   total: number
   normal: number
-  elevated: number
-  critical: number
+  abnormal: number
   normal_pct: number
-  elevated_pct: number
-  critical_pct: number
+  abnormal_pct: number
 }
 
 export interface BatchResult {
@@ -46,17 +46,19 @@ export interface BatchResult {
 }
 
 export interface ModelMetrics {
-  macro_f1: number
-  weighted_f1: number
+  f1: number
+  auc: number
+  precision: number
+  recall: number
+  specificity: number
   balanced_accuracy: number
-  auc_normal: number
-  auc_elevated: number
-  auc_critical: number
 }
 
 export interface ModelInfo {
   version: string
   model_type: string
+  classifier: string
+  threshold_mmhg: number
   metrics: ModelMetrics
   training_date: string
   training_data: {
@@ -70,6 +72,7 @@ export interface ModelInfo {
   classes: string[]
   hyperparameters: Record<string, number | string>
   global_importances: Record<string, number>
+  previous_model_note: string
 }
 
 export interface TrendPoint {

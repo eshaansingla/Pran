@@ -22,12 +22,12 @@ export default function ModelInfoPage() {
     .map(([name, val]) => ({ name: fmtFeatureName(name), value: +(val * 100).toFixed(1) }))
 
   const metrics: Array<{ label: string; value: number; fmt: (v: number) => string }> = [
-    { label: 'Macro F1',          value: info.metrics.macro_f1,          fmt: (v: number) => v.toFixed(4) },
-    { label: 'Weighted F1',       value: info.metrics.weighted_f1,        fmt: (v: number) => v.toFixed(4) },
-    { label: 'Balanced Accuracy', value: info.metrics.balanced_accuracy,  fmt: (v: number) => v.toFixed(4) },
-    { label: 'AUC \u2014 Normal',   value: info.metrics.auc_normal,       fmt: (v: number) => v.toFixed(3) },
-    { label: 'AUC \u2014 Elevated', value: info.metrics.auc_elevated,     fmt: (v: number) => v.toFixed(3) },
-    { label: 'AUC \u2014 Critical', value: info.metrics.auc_critical,     fmt: (v: number) => v.toFixed(3) },
+    { label: 'F1-Score',          value: info.metrics.f1,                fmt: (v: number) => v.toFixed(4) },
+    { label: 'AUC',               value: info.metrics.auc,               fmt: (v: number) => v.toFixed(4) },
+    { label: 'Precision',         value: info.metrics.precision,         fmt: (v: number) => v.toFixed(4) },
+    { label: 'Recall',            value: info.metrics.recall,            fmt: (v: number) => v.toFixed(4) },
+    { label: 'Specificity',       value: info.metrics.specificity,       fmt: (v: number) => v.toFixed(4) },
+    { label: 'Balanced Accuracy', value: info.metrics.balanced_accuracy, fmt: (v: number) => v.toFixed(4) },
   ]
 
   return (

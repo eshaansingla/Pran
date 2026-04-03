@@ -84,7 +84,7 @@ async def predict(req: SinglePredictRequest) -> dict[str, Any]:
     Classify a single 10-second ICP monitoring window.
 
     Input: 8 extracted physiological features.
-    Output: ICP class (0=Normal, 1=Elevated, 2=Critical), probabilities,
+    Output: ICP class (0=Normal, 1=Abnormal), probabilities,
             confidence, SHAP-based top contributing features.
     """
     errors = validate_feature_vector(req.features)
@@ -124,7 +124,7 @@ async def predict_batch_csv(file: UploadFile = File(...)) -> dict[str, Any]:
 
     predictions = predict_batch(rows)
 
-    counts = [0, 0, 0]
+    counts = [0, 0]
     for p in predictions:
         counts[p["class"]] += 1
 
@@ -132,13 +132,11 @@ async def predict_batch_csv(file: UploadFile = File(...)) -> dict[str, Any]:
         "predictions": predictions,
         "parse_warnings": parse_errors,   # non-fatal range warnings
         "summary": {
-            "total": len(predictions),
-            "normal":   counts[0],
-            "elevated": counts[1],
-            "critical": counts[2],
+            "total":        len(predictions),
+            "normal":       counts[0],
+            "abnormal":     counts[1],
             "normal_pct":   _pct(counts[0], len(predictions)),
-            "elevated_pct": _pct(counts[1], len(predictions)),
-            "critical_pct": _pct(counts[2], len(predictions)),
+            "abnormal_pct": _pct(counts[1], len(predictions)),
         },
         "timestamp": _utcnow(),
         "feature_names": FEATURE_NAMES,
