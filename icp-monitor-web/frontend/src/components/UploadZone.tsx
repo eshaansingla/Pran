@@ -42,12 +42,12 @@ export default function UploadZone({ onFile, loading, errors, onClear, hasData }
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-clinical-text-secondary uppercase tracking-wide">
+        <h2 className="text-sm font-semibold text-clinical-text-secondary dark:text-slate-300 uppercase tracking-wide">
           Data Upload
         </h2>
         <button
           onClick={downloadExample}
-          className="flex items-center gap-1.5 text-xs text-clinical-primary hover:underline"
+          className="flex items-center gap-1.5 text-xs text-clinical-primary dark:text-blue-400 hover:underline"
           aria-label="Download example CSV"
         >
           <Download size={13} />
@@ -59,6 +59,7 @@ export default function UploadZone({ onFile, loading, errors, onClear, hasData }
         <div
           role="button"
           tabIndex={0}
+          id="file-input-trigger"
           aria-label="Upload zone — drag and drop or click to select CSV"
           onClick={() => inputRef.current?.click()}
           onKeyDown={e => e.key === 'Enter' && inputRef.current?.click()}
@@ -70,20 +71,24 @@ export default function UploadZone({ onFile, loading, errors, onClear, hasData }
             flex flex-col items-center justify-center gap-3 cursor-pointer
             transition-colors duration-150 select-none
             ${dragging
-              ? 'border-clinical-primary bg-blue-50'
-              : 'border-clinical-border bg-white hover:border-clinical-primary hover:bg-blue-50/30'}
+              ? 'border-clinical-primary dark:border-blue-400 bg-blue-50 dark:bg-blue-900/20'
+              : 'border-clinical-border dark:border-slate-600 bg-white dark:bg-slate-800 hover:border-clinical-primary dark:hover:border-blue-400 hover:bg-blue-50/30 dark:hover:bg-blue-900/10'}
           `}
         >
-          <Upload
-            size={32}
-            className={dragging ? 'text-clinical-primary' : 'text-clinical-text-muted'}
-            strokeWidth={1.5}
-          />
+          {loading ? (
+            <div className="w-8 h-8 border-2 border-clinical-primary dark:border-blue-400 border-t-transparent rounded-full animate-spin" />
+          ) : (
+            <Upload
+              size={32}
+              className={dragging ? 'text-clinical-primary dark:text-blue-400' : 'text-clinical-text-muted dark:text-slate-500'}
+              strokeWidth={1.5}
+            />
+          )}
           <div className="text-center">
-            <p className="text-sm font-medium text-clinical-text-primary">
+            <p className="text-sm font-medium text-clinical-text-primary dark:text-slate-200">
               {loading ? 'Processing…' : 'Drop CSV or click to browse'}
             </p>
-            <p className="text-xs text-clinical-text-muted mt-1">
+            <p className="text-xs text-clinical-text-muted dark:text-slate-400 mt-1">
               8 feature columns · max 10 MB · .csv only
             </p>
           </div>
@@ -97,14 +102,14 @@ export default function UploadZone({ onFile, loading, errors, onClear, hasData }
           />
         </div>
       ) : (
-        <div className="flex items-center justify-between px-4 py-3 bg-white border border-clinical-border rounded-lg">
-          <div className="flex items-center gap-2 text-sm text-clinical-text-primary">
-            <FileText size={16} className="text-clinical-primary" />
+        <div className="flex items-center justify-between px-4 py-3 bg-white dark:bg-slate-800 border border-clinical-border dark:border-slate-600 rounded-lg">
+          <div className="flex items-center gap-2 text-sm text-clinical-text-primary dark:text-slate-200">
+            <FileText size={16} className="text-clinical-primary dark:text-blue-400" />
             <span>File loaded</span>
           </div>
           <button
             onClick={onClear}
-            className="flex items-center gap-1 text-xs text-clinical-text-muted hover:text-clinical-critical"
+            className="flex items-center gap-1 text-xs text-clinical-text-muted dark:text-slate-400 hover:text-clinical-critical dark:hover:text-red-400"
             aria-label="Clear uploaded data"
           >
             <X size={14} />
@@ -114,17 +119,17 @@ export default function UploadZone({ onFile, loading, errors, onClear, hasData }
       )}
 
       {errors.length > 0 && (
-        <div className="rounded-lg border border-red-200 bg-red-50 p-3 space-y-1">
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-clinical-critical">
+        <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-900/20 p-3 space-y-1">
+          <div className="flex items-center gap-1.5 text-xs font-semibold text-clinical-critical dark:text-red-400">
             <AlertCircle size={13} />
             {errors.length} validation issue{errors.length > 1 ? 's' : ''}
           </div>
           <ul className="space-y-0.5 pl-4">
             {errors.slice(0, 8).map((e, i) => (
-              <li key={i} className="text-xs text-red-700 list-disc">{e}</li>
+              <li key={i} className="text-xs text-red-700 dark:text-red-300 list-disc">{e}</li>
             ))}
             {errors.length > 8 && (
-              <li className="text-xs text-red-500 list-none">
+              <li className="text-xs text-red-500 dark:text-red-400 list-none">
                 +{errors.length - 8} more issues…
               </li>
             )}
@@ -132,7 +137,7 @@ export default function UploadZone({ onFile, loading, errors, onClear, hasData }
         </div>
       )}
 
-      <p className="text-2xs text-clinical-text-muted leading-relaxed">
+      <p className="text-2xs text-clinical-text-muted dark:text-slate-500 leading-relaxed">
         Expected columns: cardiac_amplitude, cardiac_frequency, respiratory_amplitude,
         slow_wave_power, cardiac_power, mean_arterial_pressure, head_angle, motion_artifact_flag
       </p>

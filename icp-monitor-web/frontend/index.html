@@ -11,8 +11,20 @@
       rel="stylesheet"
     />
     <meta name="description" content="Intracranial pressure classification and monitoring — clinical research prototype" />
+    <!-- Dark mode FOUC prevention: apply class before React renders -->
+    <script>
+      ;(function () {
+        try {
+          var stored = JSON.parse(localStorage.getItem('icp-monitor-store') || '{}')
+          var isDark = stored.state && stored.state.isDark != null
+            ? stored.state.isDark
+            : window.matchMedia('(prefers-color-scheme: dark)').matches
+          if (isDark) document.documentElement.classList.add('dark')
+        } catch (_) {}
+      })()
+    </script>
   </head>
-  <body class="bg-[#F7FAFC]">
+  <body>
     <div id="root"></div>
     <script type="module" src="/src/index.tsx"></script>
   </body>
