@@ -59,3 +59,6 @@ Thumbs.db
 .env
 *.env
 notes.html
+
+#── previous research ──────────────────────────────────────────────────────────────
+literature/
