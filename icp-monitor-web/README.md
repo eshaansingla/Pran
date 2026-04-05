@@ -1,7 +1,7 @@
 # ICP Monitor — Clinical Decision Support Web Application
 
 Professional hospital-grade interface for non-invasive intracranial pressure (ICP)
-classification using XGBoost, with LSTM forecasting planned for v2.0.
+classification using XGBoost binary classifier with isotonic probability calibration.
 
 **Research prototype — NOT FDA-approved — NOT for diagnostic use.**
 
@@ -17,11 +17,11 @@ docker-compose up
 
 # App available at:
 #   Frontend: http://localhost:3000
-#   Backend API: http://localhost:8000
-#   API docs: http://localhost:8000/docs
+#   Backend API: http://localhost:8001
+#   API docs: http://localhost:8001/docs
 ```
 
-Requires the model file at `../models/xgboost_final.pkl.gz`
+Requires the model file at `../models/xgboost_binary.pkl.gz`
 (relative to `icp-monitor-web/`).
 
 ---
@@ -32,14 +32,14 @@ Requires the model file at `../models/xgboost_final.pkl.gz`
 ```bash
 cd backend/
 pip install -r requirements.txt
-MODEL_PATH=../../models/xgboost_final.pkl.gz uvicorn main:app --reload --port 8000
+MODEL_PATH=../../models/xgboost_binary.pkl.gz uvicorn main:app --reload --port 8001
 ```
 
 **Frontend**
 ```bash
 cd frontend/
 npm install
-npm run dev       # http://localhost:3000  (proxies /api → :8000)
+npm run dev       # http://localhost:3000  (proxies /api → :8001)
 ```
 
 ---
@@ -51,35 +51,38 @@ npm run dev       # http://localhost:3000  (proxies /api → :8000)
 | Feature | Description |
 |---|---|
 | CSV Upload | Drag-drop or browse, 10 MB max, real-time validation |
-| Prediction Card | Class (Normal / Elevated / Critical), confidence, probability bars |
+| Prediction Card | Class (Normal / Abnormal), confidence, probability bars |
 | Trend Chart | Step-wise time-series with colour-coded ICP zones |
 | SHAP Explainer | Top-3 contributing features per prediction |
 | Session Summary | Pie chart, critical episode timeline |
-| PDF Export | One-click report with summary, event log, model metadata |
+| PDF Export | One-click report with summary, event log, live model metadata |
 
 **Keyboard shortcuts:**
 - `Ctrl+U` — open file picker
+- `Ctrl+E` — export report
+- `Ctrl+D` — toggle dark/light mode
+- `Ctrl+H` — keyboard shortcut help
 - `Ctrl+1/2/3` — switch tabs
 
 ### Tab 2: ICP Forecasting (LSTM) — Placeholder
 
 - Professional "in development" UI with mock chart
 - API stub: `POST /api/predict_forecast` → HTTP 501
-- Roadmap for v2.0 integration documented in code
+- Roadmap for v3.0 integration
 
 ### Tab 3: Model Information
 
-- Performance metrics (Macro F1, Balanced Accuracy, AUC per class)
+- Performance metrics (F1, AUC, Precision, Recall, Specificity, Balanced Accuracy)
 - Global feature importance bar chart
 - Hyperparameter table
 - Feature physiological ranges
-- Training data provenance
+- Training data provenance (live from `binary_meta.json`)
 
 ---
 
 ## API Reference
 
-Auto-generated docs available at `http://localhost:8000/docs`.
+Auto-generated docs available at `http://localhost:8001/docs`.
 
 | Endpoint | Method | Description |
 |---|---|---|
@@ -97,22 +100,30 @@ Auto-generated docs available at `http://localhost:8000/docs`.
 }
 ```
 
-**CSV column order:**
+**CSV column order (6 columns):**
 ```
 cardiac_amplitude, cardiac_frequency, respiratory_amplitude,
-slow_wave_power, cardiac_power, mean_arterial_pressure,
-head_angle, motion_artifact_flag
+slow_wave_power, cardiac_power, mean_arterial_pressure
 ```
 
 ---
 
 ## Model
 
-- **Type:** XGBoost (Gradient Boosting, 180 trees)
-- **Input:** 8 physiological features extracted from 10-second ICP windows
-- **Output:** 3 classes — Normal (<15 mmHg), Elevated (15-20 mmHg), Critical (≥20 mmHg)
-- **Macro F1:** 0.7667 | **Balanced Accuracy:** 0.7686
-- **Training data:** CHARIS (13 TBI patients) + MIMIC-III (36 general ICU patients)
+| Property | Value |
+|---|---|
+| Type | XGBoost Binary Classifier v2.2 + Isotonic Calibration |
+| Input | 6 physiological features (noise features removed by ablation) |
+| Output | Normal (<15 mmHg) vs Abnormal (≥15 mmHg) |
+| F1-Score | **0.8770** |
+| AUC-ROC | **0.9490** |
+| Balanced Accuracy | **0.8848** |
+| ECE (calibrated) | **0.0972** |
+| Threshold | 0.5450 (F1-optimised on val set) |
+| Model size | 45.9 KB (gzipped) |
+| Training data | CHARIS (13 patients) + MIMIC-III (87 patients) |
+| Total windows | 448,537 |
+| Calibration | 5-fold patient-level CV isotonic regression |
 
 ---
 

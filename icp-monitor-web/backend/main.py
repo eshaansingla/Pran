@@ -13,6 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, field_validator
 
+import model_loader
 from model_loader import (
     FEATURE_NAMES,
     get_model_info,
@@ -59,8 +60,10 @@ class SinglePredictRequest(BaseModel):
     @field_validator("features")
     @classmethod
     def check_length(cls, v: list[float]) -> list[float]:
-        if len(v) != 8:
-            raise ValueError(f"Expected 8 features, got {len(v)}")
+        from model_loader import FEATURE_NAMES
+        n = len(FEATURE_NAMES)
+        if len(v) != n:
+            raise ValueError(f"Expected {n} features, got {len(v)}")
         return v
 
 
@@ -83,7 +86,9 @@ async def predict(req: SinglePredictRequest) -> dict[str, Any]:
     """
     Classify a single 10-second ICP monitoring window.
 
-    Input: 8 extracted physiological features.
+    Input: 6 extracted physiological features (cardiac_amplitude,
+    cardiac_frequency, respiratory_amplitude, slow_wave_power,
+    cardiac_power, mean_arterial_pressure).
     Output: ICP class (0=Normal, 1=Abnormal), probabilities,
             confidence, SHAP-based top contributing features.
     """
@@ -101,7 +106,7 @@ async def predict_batch_csv(file: UploadFile = File(...)) -> dict[str, Any]:
     """
     Classify multiple windows from a CSV upload.
 
-    CSV must have 8 columns matching the feature specification.
+    CSV must have 6 columns matching the feature specification.
     Returns per-window predictions plus session summary statistics.
     """
     if not file.filename or not file.filename.lower().endswith(".csv"):
@@ -138,7 +143,8 @@ async def predict_batch_csv(file: UploadFile = File(...)) -> dict[str, Any]:
             "normal_pct":   _pct(counts[0], len(predictions)),
             "abnormal_pct": _pct(counts[1], len(predictions)),
         },
-        "timestamp": _utcnow(),
+        "calibrated":    model_loader._calibrated,
+        "timestamp":     _utcnow(),
         "feature_names": FEATURE_NAMES,
     }
 
@@ -172,16 +178,16 @@ async def example_csv() -> JSONResponse:
     """Return CSV content and column documentation."""
     header = ",".join(FEATURE_NAMES)
     examples = [
-        "32.4,1.2,8.7,1.30,2.10,95.0,0.0,0",
-        "28.1,1.1,7.2,1.65,2.55,92.0,0.0,0",
-        "45.6,1.3,12.3,1.80,3.20,98.0,0.0,0",
-        "38.9,1.25,9.8,2.10,2.90,101.0,5.0,0",
-        "52.3,1.4,14.5,2.80,3.60,105.0,0.0,0",
-        "21.7,1.0,6.4,1.15,1.85,88.0,0.0,0",
-        "61.2,1.5,18.2,3.20,4.10,110.0,0.0,0",
-        "19.4,0.95,5.8,1.05,1.60,82.0,-5.0,0",
-        "47.8,1.35,11.6,2.40,3.35,97.0,0.0,0",
-        "35.1,1.2,9.1,1.70,2.65,93.0,0.0,0",
+        "32.4,1.2,8.7,1.30,2.10,95.0",
+        "28.1,1.1,7.2,1.65,2.55,92.0",
+        "45.6,1.3,12.3,1.80,3.20,98.0",
+        "38.9,1.25,9.8,2.10,2.90,101.0",
+        "52.3,1.4,14.5,2.80,3.60,105.0",
+        "21.7,1.0,6.4,1.15,1.85,88.0",
+        "61.2,1.5,18.2,3.20,4.10,110.0",
+        "19.4,0.95,5.8,1.05,1.60,82.0",
+        "47.8,1.35,11.6,2.40,3.35,97.0",
+        "35.1,1.2,9.1,1.70,2.65,93.0",
     ]
     csv_content = header + "\n" + "\n".join(examples)
     return JSONResponse({"csv": csv_content, "header": FEATURE_NAMES})

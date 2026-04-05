@@ -48,8 +48,7 @@ def parse_csv_bytes(raw: bytes) -> tuple[list[list[float]], list[str]]:
     Returns (rows, errors).  'rows' may be empty if errors are fatal.
     Expected columns (header optional):
         cardiac_amplitude, cardiac_frequency, respiratory_amplitude,
-        slow_wave_power, cardiac_power, mean_arterial_pressure,
-        head_angle, motion_artifact_flag
+        slow_wave_power, cardiac_power, mean_arterial_pressure
     """
     errors: list[str] = []
     rows: list[list[float]] = []

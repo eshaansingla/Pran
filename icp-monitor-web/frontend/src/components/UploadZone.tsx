@@ -89,7 +89,7 @@ export default function UploadZone({ onFile, loading, errors, onClear, hasData }
               {loading ? 'Processing…' : 'Drop CSV or click to browse'}
             </p>
             <p className="text-xs text-clinical-text-muted dark:text-slate-400 mt-1">
-              8 feature columns · max 10 MB · .csv only
+              6 feature columns · max 10 MB · .csv only
             </p>
           </div>
           <input
@@ -139,7 +139,7 @@ export default function UploadZone({ onFile, loading, errors, onClear, hasData }
 
       <p className="text-2xs text-clinical-text-muted dark:text-slate-500 leading-relaxed">
         Expected columns: cardiac_amplitude, cardiac_frequency, respiratory_amplitude,
-        slow_wave_power, cardiac_power, mean_arterial_pressure, head_angle, motion_artifact_flag
+        slow_wave_power, cardiac_power, mean_arterial_pressure
       </p>
     </div>
   )

@@ -161,6 +161,19 @@ def _get(url: str, retries: int = 3) -> requests.Response | None:
     return None
 
 
+def _subject_id_from_rec_dir(rec_dir: str) -> int:
+    """
+    Extract the real MIMIC subject_id from a record path like '30/3000063'.
+    The last component of the path IS the subject_id in MIMIC-III WDB.
+    Strips any segment suffix (e.g. '3000063_0001' -> 3000063).
+    """
+    rec_name = rec_dir.split("/")[-1].split("_")[0]
+    try:
+        return int(rec_name)
+    except ValueError:
+        return abs(hash(rec_name)) % (10 ** 7)
+
+
 def _parse_layout_signals(hea_text: str) -> list[str]:
     """Parse last token from lines 1.. of a header file as signal names."""
     sigs = []
@@ -171,7 +184,80 @@ def _parse_layout_signals(hea_text: str) -> list[str]:
     return sigs
 
 
-# ── Phase 1: scan for ICP records ─────────────────────────────────────────────
+# ── Phase 1a: scan ALL records, rank by estimated length ──────────────────────
+
+def scan_all_icp_ranked(
+    all_records: list[str],
+    top_n: int = 100,
+    workers: int = 16,
+    step: int = 3,
+) -> list[str]:
+    """
+    Scan every `step`-th record for ICP + estimate recording length.
+    Returns top_n unique patients sorted by estimated window count (longest first).
+    step=3 covers ~7000 records — thorough but finishes in ~15 min.
+    """
+    candidates = all_records[::step]
+    print(f"  Scanning {len(candidates)} records (every {step}th of {len(all_records)}) for ICP + length ...")
+
+    results: list[tuple[str, int]] = []   # (rec_dir, estimated_windows)
+    done = 0
+    total = len(all_records)
+
+    def check_record(rec_dir: str) -> tuple[str, int]:
+        rec_id = rec_dir.split("/")[-1]
+        resp = _get(f"{BASE_URL}/{rec_dir}/{rec_id}_layout.hea")
+        if resp is None:
+            resp = _get(f"{BASE_URL}/{rec_dir}/{rec_id}_0001.hea")
+        if resp is None:
+            return rec_dir, 0
+        text = resp.text
+        sigs = _parse_layout_signals(text)
+        if not (ICP_CHANNELS & set(sigs)):
+            return rec_dir, 0
+        # Estimate total samples from first header line: "rec n_segs fs n_samp"
+        try:
+            first = text.strip().split("\n")[0].split()
+            # Layout header first line: recname nseg fs n_samp
+            # Signal header first line: recname nsig fs n_samp
+            n_samp = int(first[3]) if len(first) >= 4 else 0
+            fs     = int(float(first[2])) if len(first) >= 3 else TARGET_FS
+            est_wins = n_samp // (WINDOW_SAMPLES * max(1, fs // TARGET_FS))
+        except Exception:
+            est_wins = 1   # unknown length — include but rank low
+        return rec_dir, max(est_wins, 1)
+
+    total = len(candidates)
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(check_record, rec): rec for rec in candidates}
+        for fut in as_completed(futures):
+            rec_dir, est_wins = fut.result()
+            done += 1
+            if est_wins > 0:
+                results.append((rec_dir, est_wins))
+            if done % 500 == 0:
+                print(f"  ... {done}/{total} checked, {len(results)} ICP found so far")
+
+    # Deduplicate: for each real subject_id keep only the longest record
+    subject_best: dict[int, tuple[str, int]] = {}
+    for rec_dir, est_wins in results:
+        subj_id = _subject_id_from_rec_dir(rec_dir)
+        if subj_id not in subject_best or est_wins > subject_best[subj_id][1]:
+            subject_best[subj_id] = (rec_dir, est_wins)
+
+    deduped = sorted(subject_best.values(), key=lambda x: x[1], reverse=True)
+    n_dupes = len(results) - len(deduped)
+
+    print(f"\n  Found {len(results)} ICP records -> {len(deduped)} unique patients"
+          f" ({n_dupes} duplicate stays removed).")
+    print(f"  Top 5 by estimated windows:")
+    for rd, ew in deduped[:5]:
+        print(f"    {rd}  (~{ew} windows, subject_id={_subject_id_from_rec_dir(rd)})")
+
+    return [rd for rd, _ in deduped[:top_n]]
+
+
+# ── Phase 1b: scan for ICP records (original fast scan) ───────────────────────
 
 def scan_for_icp_records(
     all_records: list[str],
@@ -332,14 +418,15 @@ def extract_from_record(rec_dir: str, patient_id: int) -> tuple[list, list]:
 
 # ── Main pipeline ──────────────────────────────────────────────────────────────
 
-def main(target_patients: int, scan_step: int, out_dir: Path) -> None:
+def main(target_patients: int, scan_step: int, out_dir: Path, best: bool = False) -> None:
     import wfdb
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"\n{'='*62}")
     print(f"  MIMIC-III ICP Feature Extraction Pipeline")
-    print(f"  Target: {target_patients} patients | scan_step: {scan_step}")
+    mode = "best (full scan, ranked by length)" if best else f"first-found (scan_step={scan_step})"
+    print(f"  Target: {target_patients} patients | mode: {mode}")
     print(f"  Output: {out_dir}/")
     print(f"{'='*62}\n")
 
@@ -354,10 +441,14 @@ def main(target_patients: int, scan_step: int, out_dir: Path) -> None:
     print(f"  Total records: {len(all_records)}")
 
     # ---- 2. Scan for ICP ----
-    print(f"\n[2/4] Scanning for ICP signal ...")
-    icp_records = scan_for_icp_records(
-        all_records, scan_step=scan_step, target=target_patients
-    )
+    if best:
+        print(f"\n[2/4] Full scan — ranking all records by length, picking best {target_patients} ...")
+        icp_records = scan_all_icp_ranked(all_records, top_n=target_patients, workers=16)
+    else:
+        print(f"\n[2/4] Scanning for ICP signal ...")
+        icp_records = scan_for_icp_records(
+            all_records, scan_step=scan_step, target=target_patients
+        )
     print(f"\n  Found {len(icp_records)} ICP records.")
     if not icp_records:
         print("  ERROR: No ICP records found!")
@@ -370,8 +461,8 @@ def main(target_patients: int, scan_step: int, out_dir: Path) -> None:
     all_patient_ids: list[int]        = []
 
     for i, rec_dir in enumerate(icp_records):
-        pid   = PATIENT_ID_OFFSET + i + 1
-        print(f"  [{i+1:02d}/{len(icp_records)}] {rec_dir} (PID {pid}) ...", end=" ", flush=True)
+        pid = _subject_id_from_rec_dir(rec_dir)   # real MIMIC subject_id
+        print(f"  [{i+1:02d}/{len(icp_records)}] {rec_dir} (subject_id={pid}) ...", end=" ", flush=True)
 
         feats, labels = extract_from_record(rec_dir, pid)
 
@@ -425,5 +516,7 @@ if __name__ == "__main__":
     parser.add_argument("--out_dir",         type=Path,
                         default=Path("data/processed"),
                         help="Output directory for mimic_*.npy files.")
+    parser.add_argument("--best",            action="store_true",
+                        help="Scan ALL records, rank by recording length, pick top N longest.")
     args = parser.parse_args()
-    main(args.target_patients, args.scan_step, args.out_dir)
+    main(args.target_patients, args.scan_step, args.out_dir, best=args.best)

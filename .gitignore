@@ -7,6 +7,10 @@ data/raw/
 data/processed/
 data/*.csv
 
+# ── Test / sample CSVs in root (generated, not source) ───────────────────────
+test_data_*.csv
+sample_hardware_data.csv
+
 # ── Trained models (large binaries) ────────────────────────────────────────
 models/
 
@@ -16,15 +20,23 @@ results/
 # ── Web app — build artifacts and dependencies ──────────────────────────────
 icp-monitor-web/frontend/node_modules/
 icp-monitor-web/frontend/dist/
+icp-monitor-web/frontend/.vite/
 icp-monitor-web/backend/__pycache__/
+npm-debug.log*
+yarn-error.log
 
 # ── Python ──────────────────────────────────────────────────────────────────
 __pycache__/
+**/__pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
 venv/
 env/
+.pytest_cache/
+.coverage
+htmlcov/
+*.log
 
 # ── Firmware generated header (regenerable) ─────────────────────────────────
 firmware/esp32_icp_monitor/xgboost_model.h
@@ -36,6 +48,8 @@ logs/
 .vscode/
 .idea/
 *.swp
+*.swo
+*.orig
 
 # ── OS ──────────────────────────────────────────────────────────────────────
 .DS_Store
@@ -44,3 +58,4 @@ Thumbs.db
 # ── Secrets — NEVER commit credentials ──────────────────────────────────────
 .env
 *.env
+notes.html

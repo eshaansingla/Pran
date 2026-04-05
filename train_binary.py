@@ -29,6 +29,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 
+from sklearn.calibration import calibration_curve
+from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import (
     auc, balanced_accuracy_score, classification_report,
     confusion_matrix, f1_score, precision_score,
@@ -46,15 +48,18 @@ CLASS_NAMES = ["Normal", "Abnormal"]
 # ---------------------------------------------------------------------------
 
 def load_binary(processed_dir: Path):
-    ch_feat = np.load(processed_dir / "features.npy").astype(np.float32)[:, :8]
+    # Keep only the 6 validated features; drop head_angle (col 6) and
+    # motion_artifact_flag (col 7) — ablation confirmed 0% gain and noise.
+    KEEP = [0, 1, 2, 3, 4, 5]
+
+    ch_feat = np.load(processed_dir / "features.npy").astype(np.float32)[:, KEEP]
     ch_lab  = np.load(processed_dir / "labels.npy").astype(np.int64)
     ch_pid  = np.load(processed_dir / "patient_ids.npy").astype(np.int32)
 
     mi_feat = np.load(processed_dir / "mimic_features.npy").astype(np.float32)
     mi_lab  = np.load(processed_dir / "mimic_labels.npy").astype(np.int64)
     mi_pid  = np.load(processed_dir / "mimic_patient_ids.npy").astype(np.int32)
-    if mi_feat.shape[1] > 8:
-        mi_feat = mi_feat[:, :8]
+    mi_feat = mi_feat[:, KEEP]
 
     X   = np.vstack([ch_feat, mi_feat])
     y3  = np.concatenate([ch_lab, mi_lab])
@@ -85,8 +90,24 @@ def _split_cohort(X, y, pid):
 
 
 def patient_split(X, y, pid):
+    # CHARIS patients have IDs 1–13 (assigned during CHARIS extraction).
+    # MIMIC patients now use their real subject_id (7-digit numbers >> 13),
+    # so this boundary is stable regardless of how many MIMIC patients exist.
     ch = pid <= 13
     mi = ~ch
+
+    n_ch = len(np.unique(pid[ch]))
+    n_mi = len(np.unique(pid[mi]))
+    assert n_ch > 0, "No CHARIS patients found (pid <= 13)"
+    assert n_mi > 0, "No MIMIC patients found (pid > 13)"
+
+    # Verify GroupShuffleSplit will work: need >= 5 unique patients per cohort
+    if n_ch < 5 or n_mi < 5:
+        raise ValueError(
+            f"Too few patients for stratified split: CHARIS={n_ch}, MIMIC={n_mi}. "
+            "Need >= 5 per cohort."
+        )
+
     ch_idx = np.where(ch)[0]
     mi_idx = np.where(mi)[0]
 
@@ -144,18 +165,99 @@ def train(X_tr, y_tr, X_va, y_va):
 
 
 # ---------------------------------------------------------------------------
+# Calibration
+# ---------------------------------------------------------------------------
+
+def _ece(y_true: np.ndarray, probs: np.ndarray, n_bins: int = 10) -> float:
+    """Expected Calibration Error — lower is better, 0 is perfect."""
+    bin_edges = np.linspace(0.0, 1.0, n_bins + 1)
+    n = len(y_true)
+    ece = 0.0
+    for lo, hi in zip(bin_edges[:-1], bin_edges[1:]):
+        mask = (probs >= lo) & (probs < hi)
+        if not mask.any():
+            continue
+        ece += (mask.sum() / n) * abs(probs[mask].mean() - float(y_true[mask].mean()))
+    return float(ece)
+
+
+def calibrate(bst, X_va: np.ndarray, y_va: np.ndarray, pid_va: np.ndarray, n_folds: int = 5):
+    """
+    Cross-validated isotonic calibration to prevent overfitting to a single val set.
+
+    Splits the validation set into n_folds patient-level folds.
+    For each fold: fit IsotonicRegression on the other folds, predict on this fold.
+    Aggregates all out-of-fold calibrated probabilities, then fits a final
+    IsotonicRegression on all of them — giving a calibrator that generalises
+    better than single-fold fitting.
+
+    Returns
+    -------
+    calibrator   : IsotonicRegression  — fit on all OOF calibrated probs
+    threshold    : float               — optimal decision boundary on OOF probs
+    ece_before   : float               — ECE of raw XGBoost probs
+    ece_after    : float               — ECE after cross-validated calibration
+    """
+    from sklearn.model_selection import KFold
+
+    prob_raw = bst.predict(xgb.DMatrix(X_va))
+    ece_before = _ece(y_va, prob_raw)
+
+    # Patient-level K-fold so same patient never spans train+test within calibration
+    unique_pids = np.unique(pid_va)
+    n_folds = min(n_folds, len(unique_pids))  # can't have more folds than patients
+    kf = KFold(n_splits=n_folds, shuffle=True, random_state=SEED)
+
+    oof_probs = np.zeros(len(y_va), dtype=np.float64)
+
+    for fold_pids_tr, fold_pids_te in kf.split(unique_pids):
+        pids_tr = unique_pids[fold_pids_tr]
+        pids_te = unique_pids[fold_pids_te]
+        mask_tr = np.isin(pid_va, pids_tr)
+        mask_te = np.isin(pid_va, pids_te)
+
+        fold_cal = IsotonicRegression(out_of_bounds="clip")
+        fold_cal.fit(prob_raw[mask_tr], y_va[mask_tr])
+        oof_probs[mask_te] = fold_cal.predict(prob_raw[mask_te])
+
+    ece_after = _ece(y_va, oof_probs)
+
+    # Final calibrator: fit on all OOF predictions vs true labels
+    final_cal = IsotonicRegression(out_of_bounds="clip")
+    final_cal.fit(oof_probs, y_va)
+
+    # Optimal threshold on OOF calibrated probs
+    thresholds = np.linspace(0.05, 0.95, 181)
+    best_f1, best_t = 0.0, 0.5
+    for t in thresholds:
+        f = f1_score(y_va, (oof_probs >= t).astype(int), zero_division=0)
+        if f > best_f1:
+            best_f1, best_t = f, float(t)
+
+    print(f"  CV calibration: {n_folds} patient-level folds")
+    return final_cal, round(best_t, 4), round(ece_before, 4), round(ece_after, 4)
+
+
+# ---------------------------------------------------------------------------
 # Evaluate
 # ---------------------------------------------------------------------------
 
-def evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir: Path):
+def evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir: Path,
+             calibrator=None, threshold: float = 0.5):
     dtr = xgb.DMatrix(X_tr)
     dte = xgb.DMatrix(X_te)
 
     prob_tr = bst.predict(dtr)
     prob_te = bst.predict(dte)
 
-    pred_tr = (prob_tr >= 0.5).astype(int)
-    pred_te = (prob_te >= 0.5).astype(int)
+    if calibrator is not None:
+        prob_tr = calibrator.predict(prob_tr)
+        prob_te = calibrator.predict(prob_te)
+
+    ece_te = _ece(y_te, prob_te)
+
+    pred_tr = (prob_tr >= threshold).astype(int)
+    pred_te = (prob_te >= threshold).astype(int)
 
     auc_te  = roc_auc_score(y_te, prob_te)
     f1_te   = f1_score(y_te, pred_te, zero_division=0)
@@ -170,11 +272,13 @@ def evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir: Path):
     cm = confusion_matrix(y_te, pred_te)
     tn, fp, fn, tp = cm.ravel()
 
+    cal_tag = f"calibrated (threshold={threshold:.4f})" if calibrator is not None else "uncalibrated (threshold=0.5)"
     SEP = "=" * 60
     lines = [
         SEP,
         "  BINARY CLASSIFICATION RESULTS",
         "  Normal (<15 mmHg)  vs  Abnormal (>=15 mmHg)",
+        f"  Probabilities: {cal_tag}",
         SEP,
         "",
         "  Test-set metrics:",
@@ -184,6 +288,7 @@ def evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir: Path):
         f"    Recall (Sens.)  : {rec_te:.4f}",
         f"    Specificity     : {spec_te:.4f}",
         f"    Balanced Acc.   : {bacc_te:.4f}",
+        f"    ECE (test)      : {ece_te:.4f}   (lower is better, 0=perfect)",
         "",
         "  Overfitting check:",
         f"    Train F1        : {f1_tr:.4f}",
@@ -206,22 +311,30 @@ def evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir: Path):
     output = "\n".join(lines)
     print(output)
 
-    # ROC curve
+    # Plots: ROC | Confusion Matrix | Calibration Curve
     fpr, tpr, _ = roc_curve(y_te, prob_te)
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig, axes = plt.subplots(1, 3, figsize=(18, 5))
 
-    axes[0].plot(fpr, tpr, color="#2C5282", lw=2,
-                 label=f"AUC = {auc_te:.4f}")
-    axes[0].plot([0,1],[0,1],"k--",lw=1)
+    axes[0].plot(fpr, tpr, color="#2C5282", lw=2, label=f"AUC = {auc_te:.4f}")
+    axes[0].plot([0, 1], [0, 1], "k--", lw=1)
     axes[0].set_xlabel("False Positive Rate"); axes[0].set_ylabel("True Positive Rate")
     axes[0].set_title("ROC Curve — Binary ICP Classifier")
-    axes[0].legend(); axes[0].spines[["top","right"]].set_visible(False)
+    axes[0].legend(); axes[0].spines[["top", "right"]].set_visible(False)
 
     sns.heatmap(cm, annot=True, fmt="d", cmap="Blues",
                 xticklabels=CLASS_NAMES, yticklabels=CLASS_NAMES,
-                ax=axes[1], cbar_kws={"shrink":0.8}, linewidths=0.5)
+                ax=axes[1], cbar_kws={"shrink": 0.8}, linewidths=0.5)
     axes[1].set_xlabel("Predicted"); axes[1].set_ylabel("True")
     axes[1].set_title("Confusion Matrix — Test Set")
+
+    frac_pos, mean_pred = calibration_curve(y_te, prob_te, n_bins=10, strategy="quantile")
+    axes[2].plot(mean_pred, frac_pos, "s-", color="#2C5282",
+                 label=f"Model (ECE={ece_te:.4f})")
+    axes[2].plot([0, 1], [0, 1], "k--", lw=1, label="Perfect calibration")
+    axes[2].set_xlabel("Mean predicted probability")
+    axes[2].set_ylabel("Fraction of positives")
+    axes[2].set_title("Reliability Diagram — Test Set")
+    axes[2].legend(); axes[2].spines[["top", "right"]].set_visible(False)
 
     plt.suptitle("XGBoost Binary ICP Classifier  |  CHARIS+MIMIC  |  Test set",
                  fontsize=11, y=1.01)
@@ -236,6 +349,7 @@ def evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir: Path):
     return {
         "f1": f1_te, "auc": auc_te, "precision": prec_te,
         "recall": rec_te, "specificity": spec_te, "balanced_acc": bacc_te,
+        "ece": round(ece_te, 4),
         "tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp),
     }
 
@@ -252,7 +366,7 @@ def run(processed_dir: Path, out_dir: Path):
 
     print("\n[1/5] Loading and relabelling data ...")
     X, y, pid = load_binary(processed_dir)
-    print(f"  Total: {len(X):,} windows | {len(np.unique(pid))} patients | 8 features")
+    print(f"  Total: {len(X):,} windows | {len(np.unique(pid))} patients | 6 features")
     print_dist(y, "Combined")
 
     print("\n[2/5] Dataset-stratified split (70 / 10 / 20) ...")
@@ -273,10 +387,15 @@ def run(processed_dir: Path, out_dir: Path):
 
     bst, spw = train(X_tr, y_tr, X_va_es, y_va_es)
 
-    print("\n[4/5] Evaluating ...")
-    metrics = evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir)
+    print("\n[3.5/5] Calibrating probabilities (cross-validated isotonic on val set) ...")
+    calibrator, threshold, ece_before, ece_after = calibrate(bst, X_va, y_va, pid_va)
+    print(f"  ECE before: {ece_before:.4f}  ->  after: {ece_after:.4f}")
+    print(f"  Optimal threshold (max val-F1): {threshold:.4f}")
 
-    print("[5/5] Saving model ...")
+    print("\n[4/5] Evaluating (calibrated) ...")
+    metrics = evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir, calibrator, threshold)
+
+    print("[5/5] Saving model + calibrator ...")
     Path("models").mkdir(exist_ok=True)
 
     pkl_path = Path("models/xgboost_binary.pkl")
@@ -287,14 +406,37 @@ def run(processed_dir: Path, out_dir: Path):
     with gzip.open(gz_path, "wb", compresslevel=6) as f:
         pickle.dump(bst, f, protocol=5)
 
+    cal_gz_path = Path("models/xgboost_binary_calibrator.pkl.gz")
+    with gzip.open(cal_gz_path, "wb", compresslevel=6) as f:
+        pickle.dump(calibrator, f, protocol=5)
+
     size_kb = gz_path.stat().st_size / 1024
     flag = "OK" if size_kb < 512 else "EXCEEDS LIMIT"
-    print(f"  models/xgboost_binary.pkl.gz  ({size_kb:.1f} KB) [{flag}]")
+    print(f"  models/xgboost_binary.pkl.gz             ({size_kb:.1f} KB) [{flag}]")
+    print(f"  models/xgboost_binary_calibrator.pkl.gz  (saved)")
     print(f"  results saved -> {out_dir}/\n")
 
-    # Store scale_pos_weight for API
-    meta = {"scale_pos_weight": spw, "threshold": 15.0, "metrics": metrics}
+    # Store comprehensive metadata for API
     import json
+    from datetime import date
+    n_mimic   = int(len(np.unique(pid[pid > 13])))
+    n_charis  = int(len(np.unique(pid[pid <= 13])))
+    meta = {
+        "version":               "2.2",
+        "training_date":         date.today().isoformat(),
+        "scale_pos_weight":      spw,
+        "threshold_mmhg":        15.0,
+        "prob_threshold":        threshold,
+        "ece_before_calibration": ece_before,
+        "ece_after_calibration":  ece_after,
+        "training_data": {
+            "charis_patients":   n_charis,
+            "mimic_patients":    n_mimic,
+            "total_patients":    n_charis + n_mimic,
+            "total_windows":     int(len(X)),
+        },
+        "metrics": metrics,
+    }
     (Path("models") / "binary_meta.json").write_text(json.dumps(meta, indent=2))
 
 

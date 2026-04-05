@@ -5,11 +5,13 @@
 
 | Metric | Value |
 |---|---|
-| F1-Score (Binary) | **0.8796** |
-| AUC-ROC | **0.9623** |
-| Balanced Accuracy | **0.8831** |
-| Training Windows | **409,315** |
-| Patients | **49** (13 CHARIS + 36 MIMIC-III) |
+| F1-Score (Binary) | **0.8770** |
+| AUC-ROC | **0.9490** |
+| Balanced Accuracy | **0.8848** |
+| ECE (calibrated) | **0.0972** |
+| Training Windows | **448,537** |
+| Patients | **100** (13 CHARIS + 87 MIMIC-III) |
+| Features | **6** (noise features removed by ablation) |
 | Inference Latency | **< 5 ms** per window |
 
 ---
@@ -85,14 +87,14 @@ above this, osmotherapy, CSF drainage, or surgical decompression is indicated.
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                       MACHINE LEARNING LAYER                                 │
 │                                                                               │
-│   XGBoost Binary Classifier (v2.0)                                           │
-│   ├── Input:  8 features                                                      │
-│   ├── Output: P(Abnormal) ∈ [0, 1]                                           │
-│   ├── Threshold: 0.5                                                          │
+│   XGBoost Binary Classifier (v2.2) + Isotonic Calibration                    │
+│   ├── Input:  6 features (noise features removed by ablation)                │
+│   ├── Output: P(Abnormal) ∈ [0, 1] (calibrated)                              │
+│   ├── Threshold: 0.5450 (optimised on val F1)                                │
 │   └── SHAP:   top-3 contributing features per prediction                     │
 │                                                                               │
-│   Normal (ICP < 15 mmHg)   P < 0.5                                          │
-│   Abnormal (ICP ≥ 15 mmHg) P ≥ 0.5                                          │
+│   Normal (ICP < 15 mmHg)   P < 0.5450                                       │
+│   Abnormal (ICP ≥ 15 mmHg) P ≥ 0.5450                                       │
 └─────────────────────────────────┬───────────────────────────────────────────┘
                                   │ JSON prediction + SHAP values
                                   ▼
@@ -123,7 +125,7 @@ flowchart TD
     B --> C[Extract 8 Features\nper window]
     C --> D{Data Source?}
     D -->|CHARIS 13 patients| E[CHARIS Split\nGroupShuffleSplit\nby patient_id]
-    D -->|MIMIC-III 36 patients| F[MIMIC Split\nGroupShuffleSplit\nby patient_id]
+    D -->|MIMIC-III 87 patients| F[MIMIC Split\nGroupShuffleSplit\nby subject_id]
     E --> G[CHARIS Train 70%]
     E --> H[CHARIS Val 10%]
     E --> I[CHARIS Test 20%]
@@ -139,11 +141,12 @@ flowchart TD
     N --> P
     P --> Q{Converged?}
     Q -->|No| P
-    Q -->|Yes at round 420| R[Final Model\nxgboost_binary.pkl.gz\n171.9 KB]
+    Q -->|Yes at round 84| R[Final Model\nxgboost_binary.pkl.gz\n45.9 KB]
     R --> S[Evaluate on\nHeld-out Test Set]
     O --> S
-    S --> T[F1=0.8796\nAUC=0.9623\nBal.Acc=0.8831]
-    T --> U[Save model + compress gzip]
+    S --> T[F1=0.8770\nAUC=0.9490\nBal.Acc=0.8848]
+    T --> CAL[5-fold CV Isotonic\nCalibration\nECE=0.0972]
+    CAL --> U[Save model + calibrator\n+ binary_meta.json]
     U --> V[FastAPI Deployment]
 ```
 
@@ -248,9 +251,10 @@ Pran/
 ├── predict_from_hardware.py               # CLI inference from ESP32 CSV output
 │
 ├── models/
-│   ├── xgboost_binary.pkl.gz              # ★ Production model (171.9 KB, gzipped)
+│   ├── xgboost_binary.pkl.gz              # ★ Production model (137 KB, gzipped)
+│   ├── xgboost_binary_calibrator.pkl.gz   # Isotonic calibrator (gzipped)
 │   ├── xgboost_binary.pkl                 # Uncompressed model
-│   └── binary_meta.json                   # scale_pos_weight, threshold, metrics
+│   └── binary_meta.json                   # version, threshold, metrics, patient counts
 │
 ├── results/
 │   ├── binary/
@@ -316,13 +320,13 @@ Pran/
 | Dataset | Source | Patients | Windows | ICP Distribution |
 |---|---|---|---|---|
 | CHARIS | PhysioNet (TBI ICU) | 13 | ~400,000 | 38% Normal / 26% Elevated / 36% Critical |
-| MIMIC-III | PhysioNet (General ICU) | 36 | ~9,315 | 87% Normal / 9% Elevated / 4% Critical |
-| **Combined** | | **49** | **409,315** | **39% Normal / 61% Abnormal (binary)** |
+| MIMIC-III | PhysioNet (General ICU) | 87 | ~48,537 | 87% Normal / 9% Elevated / 4% Critical |
+| **Combined** | | **100** | **448,537** | **~39% Normal / 61% Abnormal (binary)** |
 
 ### Why Two Datasets?
 
 - **CHARIS**: small (13 patients), balanced, TBI-specific, gold-standard ICP catheters
-- **MIMIC-III**: large (36 patients), heavily skewed (87% Normal), general ICU population
+- **MIMIC-III**: large (87 patients — deduplicated by real subject_id, longest record per patient), heavily skewed (87% Normal), general ICU population
 
 Combining them exposes the model to both balanced and skewed real-world distributions,
 improving generalisability without biasing training toward either cohort.
@@ -372,7 +376,7 @@ Raw optical signal @ 125 Hz
 │
 └── Sliding window: 10 seconds = 1,250 samples
     Step: non-overlapping (adjacent windows)
-    Total: 409,315 windows across 49 patients
+    Total: 448,537 windows across 100 patients
 ```
 
 ### Feature Extraction Pipeline
@@ -408,11 +412,11 @@ Raw optical signal @ 125 Hz
 | 3 | `slow_wave_power` | Wavelet D5 energy ratio | — | 0.05 – 5.0 |
 | 4 | `cardiac_power` | Wavelet D4 energy ratio | — | 0.1 – 5.0 |
 | 5 | `mean_arterial_pressure` | Mean arterial pressure proxy | mmHg | 50 – 150 |
-| 6 | `head_angle` | Patient head elevation angle | degrees | −20 – 90 |
-| 7 | `motion_artifact_flag` | Binary motion artifact indicator | — | 0 / 1 |
 
-> **Note:** Phase-lag features (phase_lag_mean, phase_lag_std, phase_coherence) were removed
-> after an ablation study showed delta F1 = −0.026 (hurt performance) due to high noise in short windows.
+> **Removed in v2.2 (ablation-driven):** `head_angle` (0% gain, +0.007 F1 when removed) and
+> `motion_artifact_flag` (0% gain, +0.007 F1 when removed). Both were confirmed noise features
+> that added no predictive signal. Phase-lag features (phase_lag_mean, phase_lag_std,
+> phase_coherence) were also removed earlier — delta F1 = −0.026 due to high noise in short windows.
 
 ### Why These Features Work
 
@@ -447,11 +451,11 @@ before merging, then the splits are combined. This prevents the test set from be
 dominated by MIMIC's 87% Normal distribution.
 
 ```
-CHARIS (13 patients)           MIMIC-III (36 patients)
+CHARIS (13 patients)           MIMIC-III (87 patients)
       │                               │
       ▼                               ▼
 GroupShuffleSplit              GroupShuffleSplit
-by patient_id                  by patient_id
+by patient_id                  by subject_id (deduplicated)
       │                               │
   70/10/20                        70/10/20
       │                               │
@@ -505,45 +509,30 @@ scale_pos_weight = 96,345 / 202,557 = 0.4756
 
 ## 8. Model Results
 
-### Binary Classifier — Test Set (56,106 windows, 20% hold-out)
+### Binary Classifier — Test Set (20% hold-out, calibrated, threshold = 0.5450)
 
 ```
 ============================================================
-  BINARY CLASSIFICATION RESULTS
+  BINARY CLASSIFICATION RESULTS  (v2.2)
   Normal (<15 mmHg)  vs  Abnormal (>=15 mmHg)
+  6 features (head_angle + motion_artifact_flag removed)
 ============================================================
 
-  Test-set metrics:
-    F1-score        : 0.8796   ✓ PASS  (target >= 0.80)
-    AUC-ROC         : 0.9623   ✓ PASS  (target >= 0.90)
-    Precision       : 0.9416
-    Recall (Sens.)  : 0.8252
-    Specificity     : 0.9409
-    Balanced Acc.   : 0.8831
+  Test-set metrics (after isotonic calibration):
+    F1-score        : 0.8770   ✓ PASS  (target >= 0.80)
+    AUC-ROC         : 0.9490   ✓ PASS  (target >= 0.90)
+    Precision       : 0.9443
+    Recall (Sens.)  : 0.8186
+    Specificity     : 0.9510
+    Balanced Acc.   : 0.8848
+    ECE (calibrated): 0.0972  ← improved vs v2.1 (0.1286)
 
-  Per-class report:
-                precision   recall  f1-score   support
-    Normal         0.82      0.94      0.88     26,031
-    Abnormal       0.94      0.83      0.88     30,075
-    accuracy                           0.88     56,106
-    macro avg      0.88      0.88      0.88     56,106
+  Calibration:
+    Method          : 5-fold patient-level cross-validated isotonic regression
+    Threshold       : 0.5450  (optimised on OOF val predictions via F1 sweep)
+    ECE before cal  : 0.1329
+    ECE after cal   : 0.0972
 ============================================================
-```
-
-### Confusion Matrix
-
-```
-                   Predicted
-                Normal    Abnormal
-         ┌──────────┬──────────┐
-Actual   │          │          │
-Normal   │  24,492  │   1,539  │   ← 94% correctly identified
-         ├──────────┼──────────┤
-Abnormal │   5,256  │  24,819  │   ← 83% correctly identified
-         └──────────┴──────────┘
-
-TN: 24,492  FP:  1,539   Specificity: 94.1%
-FN:  5,256  TP: 24,819   Sensitivity: 82.5%
 ```
 
 ### Hyperparameters
@@ -564,35 +553,57 @@ FN:  5,256  TP: 24,819   Sensitivity: 82.5%
 
 | Format | Path | Size |
 |---|---|---|
-| Compressed | `models/xgboost_binary.pkl.gz` | 171.9 KB |
-| Uncompressed | `models/xgboost_binary.pkl` | ~800 KB |
-| Metadata | `models/binary_meta.json` | < 1 KB |
+| Compressed model | `models/xgboost_binary.pkl.gz` | 45.9 KB |
+| Calibrator | `models/xgboost_binary_calibrator.pkl.gz` | < 10 KB |
+| Uncompressed model | `models/xgboost_binary.pkl` | ~200 KB |
+| Metadata | `models/binary_meta.json` | < 2 KB |
 
-### Global Feature Importance (Gain)
+### Global Feature Importance (Gain) — Extracted from Trained Model (v2.2)
+
+Computed via `bst.get_score(importance_type='gain')`, normalised to 100%.
 
 ```
-slow_wave_power        ████████████████████████████████  ~32%
-mean_arterial_pressure ██████████████████████████        ~26%
-cardiac_amplitude      ██████████████████               ~18%
-cardiac_power          ████████████                      ~12%
-cardiac_frequency      ██████                             ~6%
-respiratory_amplitude  ████                               ~4%
-head_angle             ██                                 ~2%
-motion_artifact_flag   █                                  ~0%
+slow_wave_power        ███████████████████████████     26.6%
+cardiac_amplitude      █████████████████████           21.2%
+respiratory_amplitude  █████████████████████           21.0%
+cardiac_power          ███████████████                 15.0%
+cardiac_frequency      ██████████                      10.0%
+mean_arterial_pressure ██████                           6.2%
 ```
 
-**Interpretation:** Slow-wave power (Lundberg B-wave proxy) is the strongest ICP
-discriminator — consistent with the neuroscience literature. MAP is second, reflecting
-impaired cerebrovascular autoregulation in hypertensive ICP states.
+*head_angle and motion_artifact_flag removed in v2.2 — 0% gain confirmed by ablation.*
+
+### Ablation Study — F1 Drop per Feature (v2.2, 6 features, baseline F1 = 0.8913)
+
+Each feature was removed, the model retrained from scratch, and F1 compared to baseline.
+
+| Feature | Gain% | Ablation F1 | AUC | F1 Drop | Verdict |
+|---|---|---|---|---|---|
+| `cardiac_amplitude` | 21.2% | 0.8140 | 0.8923 | **−0.0773** | Critical |
+| `cardiac_frequency` | 10.0% | 0.8519 | 0.9304 | −0.0394 | Important |
+| `cardiac_power` | 15.0% | 0.8854 | 0.9577 | −0.0059 | Moderate |
+| `mean_arterial_pressure` | 6.2% | 0.8852 | 0.9639 | −0.0061 | Moderate |
+| `slow_wave_power` | 26.6% | 0.8925 | 0.9650 | +0.0012 | Redundant† |
+| `respiratory_amplitude` | 21.0% | 0.8946 | 0.9651 | +0.0033 | Redundant† |
+
+> **† slow_wave_power and respiratory_amplitude** both have high gain but removing either
+> slightly improves F1 due to correlation with cardiac features. `cardiac_amplitude` is
+> the true most critical feature — its removal causes an irreplaceable −0.077 F1 collapse.
+> This is physiologically correct: elevated ICP reduces TM compliance and directly
+> attenuates cardiac pulsation amplitude.
+
+**Note on v2.1 → v2.2 transition:** Removing `head_angle` (0% gain) and
+`motion_artifact_flag` (0% gain) reduced the model from 137 KB to **45.9 KB** (67% smaller),
+improved ECE from 0.1286 to **0.0972**, and maintained all performance targets.
 
 ### Overfitting Analysis
 
 ```
-Train F1: 0.9657
-Test  F1: 0.8796
-Gap:      +0.086  (flagged OVERFIT by script — but structural, not memorisation)
+Train F1: 0.9483
+Test  F1: 0.8770
+Gap:      +0.071  (OK — within acceptable range)
 
-Structural cause: train set is 68% Abnormal vs test set 54% Abnormal.
+Structural cause: train set is ~68% Abnormal vs test set ~54% Abnormal.
 The imbalance difference arises from patient-level split randomness
 between CHARIS (balanced) and MIMIC (skewed) cohorts.
 The model is NOT memorising patients — it generalises to held-out patients.
@@ -606,7 +617,7 @@ The model is NOT memorising patients — it generalises to held-out patients.
 
 ```
 Train:  CHARIS only — 13 TBI ICU patients (80% train / 20% early-stop val)
-Test:   All 36 MIMIC-III patients — never seen during training
+Test:   All 87 MIMIC-III patients — never seen during training
 Goal:   Measure real-world OOD generalisation across sensor/patient populations
 ```
 
@@ -731,7 +742,7 @@ Single 10-second window prediction with SHAP attribution.
 **Request:**
 ```json
 {
-  "features": [32.4, 1.2, 8.7, 1.30, 2.10, 95.0, 0.0, 0]
+  "features": [32.4, 1.2, 8.7, 1.30, 2.10, 95.0]
 }
 ```
 
@@ -873,9 +884,11 @@ docker-compose up
 ```bash
 # Requires data/processed/ to exist (run download scripts first)
 python train_binary.py
-# → models/xgboost_binary.pkl.gz  (171.9 KB)
+# → models/xgboost_binary.pkl.gz            (45.9 KB, gzipped)
+# → models/xgboost_binary_calibrator.pkl.gz (isotonic calibrator)
+# → models/binary_meta.json                 (metrics, threshold, patient counts)
 # → results/binary/binary_report.txt
-# → results/binary/binary_evaluation.png
+# → results/binary/binary_evaluation.png    (ROC + confusion matrix + reliability diagram)
 ```
 
 ### Run Cross-Dataset Evaluation
@@ -883,7 +896,7 @@ python train_binary.py
 ```bash
 python cross_dataset_eval.py
 # → CHARIS internal F1 = 0.786
-# → MIMIC OOD F1      = 0.610
+# → MIMIC-III OOD F1  = 0.610 (honest OOD gap due to class distribution shift)
 ```
 
 ---
@@ -893,18 +906,18 @@ python cross_dataset_eval.py
 ### Column Order
 
 ```
-cardiac_amplitude, cardiac_frequency, respiratory_amplitude, slow_wave_power,
-cardiac_power, mean_arterial_pressure, head_angle, motion_artifact_flag
+cardiac_amplitude, cardiac_frequency, respiratory_amplitude,
+slow_wave_power, cardiac_power, mean_arterial_pressure
 ```
 
 ### Example File
 
 ```csv
-cardiac_amplitude,cardiac_frequency,respiratory_amplitude,slow_wave_power,cardiac_power,mean_arterial_pressure,head_angle,motion_artifact_flag
-32.4,1.2,8.7,1.30,2.10,95.0,0.0,0
-28.1,1.1,7.2,1.65,2.55,92.0,0.0,0
-45.6,1.3,12.3,1.80,3.20,98.0,0.0,0
-38.9,1.25,9.8,2.10,2.90,101.0,5.0,0
+cardiac_amplitude,cardiac_frequency,respiratory_amplitude,slow_wave_power,cardiac_power,mean_arterial_pressure
+32.4,1.2,8.7,1.30,2.10,95.0
+28.1,1.1,7.2,1.65,2.55,92.0
+45.6,1.3,12.3,1.80,3.20,98.0
+38.9,1.25,9.8,2.10,2.90,101.0
 ```
 
 ### Physiological Ranges (Validation Limits)
@@ -917,8 +930,6 @@ cardiac_amplitude,cardiac_frequency,respiratory_amplitude,slow_wave_power,cardia
 | slow_wave_power | 0.05 | 5.0 |
 | cardiac_power | 0.1 | 5.0 |
 | mean_arterial_pressure | 50.0 | 150.0 mmHg |
-| head_angle | −20.0 | 90.0° |
-| motion_artifact_flag | 0 | 1 |
 
 **Notes:**
 - Header row is optional — backend auto-detects
@@ -958,8 +969,8 @@ cardiac_amplitude,cardiac_frequency,respiratory_amplitude,slow_wave_power,cardia
 > by qualified neurosurgeons, intensivists, or neurologists using validated,
 > approved monitoring equipment.
 >
-> Model performance (F1 = 0.88, AUC = 0.96) has been evaluated exclusively on
-> held-out research data from PhysioNet (CHARIS + MIMIC-III). Real-world performance
+> Model performance (F1 = 0.8770, AUC = 0.9490, ECE = 0.0972) has been evaluated
+> exclusively on held-out research data from PhysioNet (CHARIS + MIMIC-III). Real-world performance
 > may differ significantly due to sensor hardware variation, patient population
 > differences, and signal processing pipeline differences.
 >

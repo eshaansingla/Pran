@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect } from 'react'
 import { FileDown, ChevronDown, FileText, Table } from 'lucide-react'
-import type { BatchResult } from '../types'
+import type { BatchResult, ModelInfo } from '../types'
 import { sessionId, downloadBlob } from '../utils/formatters'
+import { fetchModelInfo } from '../utils/api'
 
 interface Props {
   result: BatchResult
@@ -26,8 +27,12 @@ function exportCSV(result: BatchResult) {
 }
 
 async function exportPDF(result: BatchResult) {
-  const { jsPDF } = await import('jspdf')
+  const [{ jsPDF }, modelInfo] = await Promise.all([
+    import('jspdf'),
+    fetchModelInfo().catch(() => null as ModelInfo | null),
+  ])
   const doc = new jsPDF({ unit: 'mm', format: 'a4' })
+  const mi = modelInfo
   const sid = sessionId()
   const now = new Date().toLocaleString('en-GB', { hour12: false })
   const { summary } = result
@@ -62,7 +67,7 @@ async function exportPDF(result: BatchResult) {
   doc.text('ICP MONITORING REPORT — CLINICAL DECISION SUPPORT', 14, 9)
   doc.setFontSize(7)
   doc.setFont('helvetica', 'normal')
-  doc.text('NOT FOR DIAGNOSTIC USE | Research Prototype v2.0', 14, 12.5)
+  doc.text(`NOT FOR DIAGNOSTIC USE | Research Prototype v${mi?.version ?? '2.1'}`, 14, 12.5)
   y = 22
 
   line('GENERATED: ' + now, { bold: true, size: 9 })
@@ -132,13 +137,14 @@ async function exportPDF(result: BatchResult) {
   // Model info
   line('MODEL INFORMATION', { bold: true, size: 11 })
   gap(2)
-  line('Model Type          : XGBoost Binary Classifier', { size: 10 })
-  line('Version             : 2.0', { size: 10 })
-  line('Training Date       : 2026-04-03', { size: 10 })
-  line('Training Data       : CHARIS (13 patients) + MIMIC-III (36 patients)', { size: 10 })
-  line('F1-Score            : 0.8796', { size: 10 })
-  line('AUC                 : 0.9623', { size: 10 })
-  line('Balanced Accuracy   : 0.8831', { size: 10 })
+  line(`Model Type          : ${mi?.model_type ?? 'XGBoost Binary Classifier'}`, { size: 10 })
+  line(`Version             : ${mi?.version ?? '2.1'}`, { size: 10 })
+  line(`Training Date       : ${mi?.training_date ?? 'N/A'}`, { size: 10 })
+  line(`Training Data       : CHARIS (${mi?.training_data.charis_patients ?? 13} patients) + MIMIC-III (${mi?.training_data.mimic_patients ?? '?'} patients)`, { size: 10 })
+  line(`F1-Score            : ${(mi?.metrics.f1 ?? 0.8796).toFixed(4)}`, { size: 10 })
+  line(`AUC                 : ${(mi?.metrics.auc ?? 0.9623).toFixed(4)}`, { size: 10 })
+  line(`Balanced Accuracy   : ${(mi?.metrics.balanced_accuracy ?? 0.8831).toFixed(4)}`, { size: 10 })
+  if (mi?.calibrated) line('Calibration         : Isotonic (probabilities calibrated)', { size: 10 })
   gap(3)
   rule()
 
