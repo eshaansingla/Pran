@@ -174,7 +174,7 @@ export default function ModelInfoPage() {
           This is a <strong>research prototype</strong> developed as a capstone project.
           It is <strong>NOT FDA-approved</strong> and is <strong>not intended for autonomous diagnostic use</strong>.
           All clinical decisions must be made by qualified medical professionals.
-          Binary model v2.2 — 6 features, F1 = 0.89, AUC = 0.97 — evaluated on held-out research data only.
+          Binary model v2.2 — 6 features, F1 = 0.88, AUC = 0.95 — evaluated on held-out research data only.
           Validate rigorously before any clinical deployment.
         </p>
       </div>

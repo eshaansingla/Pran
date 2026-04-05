@@ -77,10 +77,10 @@ above this, osmotherapy, CSF drainage, or surgical decompression is indicated.
 │       ├── Wavelet D5 level   ──► slow_wave_power                             │
 │       ├── Wavelet D4 level   ──► cardiac_power                               │
 │       ├── Signal mean        ──► mean_arterial_pressure (proxy)              │
-│       ├── External sensor    ──► head_angle                                  │
-│       └── Threshold check    ──► motion_artifact_flag                        │
+│       ├── External sensor    ──► head_angle (removed in v2.2 — 0% gain)     │
+│       └── Threshold check    ──► motion_artifact_flag (removed in v2.2)      │
 │                                                                               │
-│                         8 features per window                                 │
+│                    6 features per window (after v2.2 ablation)                │
 └─────────────────────────────────┬───────────────────────────────────────────┘
                                   │ Feature vector [f₀ ... f₇]
                                   ▼
@@ -122,7 +122,7 @@ above this, osmotherapy, CSF drainage, or surgical decompression is indicated.
 ```mermaid
 flowchart TD
     A[Raw Optical Signal\n125 Hz time-series] --> B[Segment into\n10-second windows\n1,250 samples each]
-    B --> C[Extract 8 Features\nper window]
+    B --> C[Extract 6 Features\nper window]
     C --> D{Data Source?}
     D -->|CHARIS 13 patients| E[CHARIS Split\nGroupShuffleSplit\nby patient_id]
     D -->|MIMIC-III 87 patients| F[MIMIC Split\nGroupShuffleSplit\nby subject_id]
@@ -167,12 +167,12 @@ sequenceDiagram
     M-->>F: P(Abnormal) per window
     F-->>U: predictions[], summary{}\nnormal/abnormal counts
 
-    U->>F: POST /api/predict\n{features: [f0..f7]}
+    U->>F: POST /api/predict\n{features: [f0..f5]}
     F->>V: validate_feature_vector()
     V-->>F: errors[] or OK
     F->>M: predict_single(features)
     M->>S: predict(pred_contribs=True)
-    S-->>M: SHAP values (9,)
+    S-->>M: SHAP values (7,)
     M-->>F: class, probability,\ntop_features[3]
     F-->>U: Full prediction + SHAP
 ```
@@ -234,7 +234,7 @@ Pran/
 │   ├── data/
 │   │   ├── download_physionet.py          # PhysioNet WFDB downloader (credentials req.)
 │   │   ├── segment_windows.py             # 10-second windowing @ 125 Hz
-│   │   ├── extract_features.py            # 8-feature extraction (FFT + wavelet)
+│   │   ├── extract_features.py            # 6-feature extraction (FFT + wavelet)
 │   │   ├── generate_labels.py             # ICP threshold → binary labels
 │   │   └── save_processed_data.py         # NumPy arrays to data/processed/
 │   └── models/
@@ -251,7 +251,7 @@ Pran/
 ├── predict_from_hardware.py               # CLI inference from ESP32 CSV output
 │
 ├── models/
-│   ├── xgboost_binary.pkl.gz              # ★ Production model (137 KB, gzipped)
+│   ├── xgboost_binary.pkl.gz              # ★ Production model (45.9 KB, gzipped)
 │   ├── xgboost_binary_calibrator.pkl.gz   # Isotonic calibrator (gzipped)
 │   ├── xgboost_binary.pkl                 # Uncompressed model
 │   └── binary_meta.json                   # version, threshold, metrics, patient counts

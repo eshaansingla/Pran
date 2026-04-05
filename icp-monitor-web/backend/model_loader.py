@@ -196,7 +196,7 @@ def get_model_info() -> dict[str, Any]:
     saved_metrics  = _meta.get("metrics", {})
     saved_td       = _meta.get("training_data", {})
     return {
-        "version":       _meta.get("version", "2.1"),
+        "version":       _meta.get("version", "2.2"),
         "model_type":    "XGBoost Binary + Isotonic Calibration",
         "classifier":    "Normal (<15 mmHg) vs Abnormal (>=15 mmHg)",
         "threshold_mmhg": 15.0,
@@ -204,18 +204,18 @@ def get_model_info() -> dict[str, Any]:
         "calibrated":     _calibrated,
         "ece_after_calibration": _meta.get("ece_after_calibration"),
         "metrics": {
-            "f1":               saved_metrics.get("f1",           0.8796),
-            "auc":              saved_metrics.get("auc",          0.9623),
-            "precision":        saved_metrics.get("precision",    0.9416),
-            "recall":           saved_metrics.get("recall",       0.8252),
-            "specificity":      saved_metrics.get("specificity",  0.9409),
-            "balanced_accuracy":saved_metrics.get("balanced_acc", 0.8831),
+            "f1":               saved_metrics.get("f1",           0.8770),
+            "auc":              saved_metrics.get("auc",          0.9490),
+            "precision":        saved_metrics.get("precision",    0.9443),
+            "recall":           saved_metrics.get("recall",       0.8186),
+            "specificity":      saved_metrics.get("specificity",  0.9510),
+            "balanced_accuracy":saved_metrics.get("balanced_acc", 0.8848),
         },
-        "training_date": _meta.get("training_date", "2026-04-03"),
+        "training_date": _meta.get("training_date", "2026-04-05"),
         "training_data": {
             "charis_patients": saved_td.get("charis_patients", 13),
-            "mimic_patients":  saved_td.get("mimic_patients",  36),
-            "total_windows":   saved_td.get("total_windows",   409315),
+            "mimic_patients":  saved_td.get("mimic_patients",  87),
+            "total_windows":   saved_td.get("total_windows",   448537),
         },
         "features":          FEATURE_NAMES,
         "feature_units":     FEATURE_UNITS,

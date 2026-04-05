@@ -96,7 +96,7 @@ Auto-generated docs available at `http://localhost:8001/docs`.
 **Request format for `/api/predict`:**
 ```json
 {
-  "features": [32.4, 1.2, 8.7, 1.30, 2.10, 95.0, 0.0, 0]
+  "features": [32.4, 1.2, 8.7, 1.30, 2.10, 95.0]
 }
 ```
 
