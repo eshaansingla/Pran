@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
-import type { BatchResult, WindowPrediction } from '../types'
+import type { BatchResult, ForecastResult, WindowPrediction } from '../types'
 
 export interface StoredSession {
   id: string
@@ -13,16 +13,34 @@ export interface StoredSession {
   predictions: WindowPrediction[]  // capped at 200 for storage
 }
 
+export interface StoredForecast {
+  id: string
+  date: string           // ISO string
+  fileName: string
+  seqLen: number
+  durationMin: number    // history window duration
+  class: 0 | 1
+  probability: number
+  confidence_label: string
+  horizon_minutes: number
+  result: ForecastResult
+}
+
 interface AppStore {
   // ── Theme ──────────────────────────────────────────────────
   isDark: boolean
   setDark: (v: boolean) => void
   toggleDark: () => void
 
-  // ── Session history ────────────────────────────────────────
+  // ── XGBoost session history ────────────────────────────────
   sessions: StoredSession[]
   addSession: (result: BatchResult) => void
   removeSession: (id: string) => void
+
+  // ── LSTM forecast history ──────────────────────────────────
+  forecasts: StoredForecast[]
+  addForecast: (result: ForecastResult, fileName: string, seqLen: number) => void
+  removeForecast: (id: string) => void
 
   // ── Flagged windows ────────────────────────────────────────
   flagged: number[]
@@ -37,7 +55,7 @@ function systemDark(): boolean {
 export const useStore = create<AppStore>()(
   persist(
     (set, get) => ({
-      // Theme — initialize from system, override by localStorage via persist
+      // Theme
       isDark: systemDark(),
       setDark: (v) => {
         set({ isDark: v })
@@ -49,6 +67,7 @@ export const useStore = create<AppStore>()(
         document.documentElement.classList.toggle('dark', next)
       },
 
+      // XGBoost sessions
       sessions: [],
       addSession: (result) => {
         const s: StoredSession = {
@@ -66,6 +85,27 @@ export const useStore = create<AppStore>()(
       removeSession: (id) =>
         set(state => ({ sessions: state.sessions.filter(s => s.id !== id) })),
 
+      // LSTM forecasts
+      forecasts: [],
+      addForecast: (result, fileName, seqLen) => {
+        const f: StoredForecast = {
+          id: `fct-${Date.now()}`,
+          date: new Date().toISOString(),
+          fileName,
+          seqLen,
+          durationMin: +(seqLen * 10 / 60).toFixed(1),
+          class: result.class,
+          probability: result.probability,
+          confidence_label: result.confidence_label,
+          horizon_minutes: result.horizon_minutes,
+          result,
+        }
+        set(state => ({ forecasts: [f, ...state.forecasts].slice(0, 10) }))
+      },
+      removeForecast: (id) =>
+        set(state => ({ forecasts: state.forecasts.filter(f => f.id !== id) })),
+
+      // Flagged windows
       flagged: [],
       toggleFlag: (windowId) =>
         set(state => ({
@@ -78,9 +118,10 @@ export const useStore = create<AppStore>()(
     {
       name: 'icp-monitor-store',
       partialize: (state) => ({
-        isDark:   state.isDark,
-        sessions: state.sessions,
-        flagged:  state.flagged,
+        isDark:    state.isDark,
+        sessions:  state.sessions,
+        forecasts: state.forecasts,
+        flagged:   state.flagged,
       }),
     }
   )

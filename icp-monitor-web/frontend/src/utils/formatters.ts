@@ -58,3 +58,10 @@ export function sessionId(): string {
   const d = new Date()
   return `SES-${d.getFullYear()}${String(d.getMonth()+1).padStart(2,'0')}${String(d.getDate()).padStart(2,'0')}-${String(d.getHours()).padStart(2,'0')}${String(d.getMinutes()).padStart(2,'0')}`
 }
+
+/** Estimates ICP (mmHg) from P(abnormal) using a logistic transform anchored at 15 mmHg threshold. */
+export function probToICP(p: number): number {
+  const clamped = Math.max(0.001, Math.min(0.999, p))
+  const logit   = Math.log(clamped / (1 - clamped))
+  return Math.max(0, Math.min(40, 15 + 4.5 * logit))
+}

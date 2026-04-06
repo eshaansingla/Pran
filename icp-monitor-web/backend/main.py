@@ -22,6 +22,7 @@ from model_loader import (
     predict_single,
 )
 from validation import ValidationError, parse_csv_bytes, validate_feature_vector
+import lstm_predictor
 
 app = FastAPI(
     title="ICP Monitor API",
@@ -79,6 +80,17 @@ async def health() -> dict[str, str]:
 @app.get("/api/model_info")
 async def model_info() -> dict[str, Any]:
     return get_model_info()
+
+
+@app.get("/api/lstm_info")
+async def lstm_info() -> JSONResponse:
+    """LSTM forecaster metadata — returns {} with 404 if not trained yet."""
+    from pathlib import Path
+    import json
+    meta_path = Path(__file__).parent.parent.parent / "models" / "lstm_meta.json"
+    if not meta_path.exists():
+        return JSONResponse(status_code=404, content={"error": "LSTM model not trained yet"})
+    return JSONResponse(content=json.loads(meta_path.read_text()))
 
 
 @app.post("/api/predict")
@@ -149,28 +161,56 @@ async def predict_batch_csv(file: UploadFile = File(...)) -> dict[str, Any]:
     }
 
 
-@app.post("/api/predict_forecast")
-async def predict_forecast() -> JSONResponse:
-    """
-    LSTM-based ICP trend forecasting.
+class ForecastRequest(BaseModel):
+    sequence: list[list[float]]
 
-    STATUS: Not yet implemented. Planned for v2.0 (Q3 2026).
-    Will accept sequences of 30+ consecutive windows and return
-    predicted ICP trajectory with 95% confidence intervals.
+    @field_validator("sequence")
+    @classmethod
+    def check_sequence(cls, v: list[list[float]]) -> list[list[float]]:
+        if len(v) < 30:
+            raise ValueError(
+                f"Sequence must contain at least 30 windows (got {len(v)}). "
+                "Each window is a 10-second monitoring interval."
+            )
+        for i, row in enumerate(v):
+            if len(row) != 6:
+                raise ValueError(
+                    f"Each window must have exactly 6 features (row {i} has {len(row)})."
+                )
+        return v
+
+
+@app.post("/api/predict_forecast")
+async def predict_forecast(req: ForecastRequest) -> JSONResponse:
     """
-    return JSONResponse(
-        status_code=501,
-        content={
-            "error": "LSTM forecasting not yet available",
-            "status": "in_development",
-            "expected_release": "v2.0 (Q3 2026)",
-            "description": (
-                "Future endpoint will accept POST with multipart CSV "
-                "containing >= 30 consecutive 10-second windows and return "
-                "15-30 minute ICP trajectory predictions."
-            ),
-        },
-    )
+    LSTM-based ICP trend forecasting — 15 minutes ahead.
+
+    Input: JSON body with 'sequence' key containing ≥30 windows (rows of 6 features).
+    The model uses the last 30 windows as context.
+
+    Output: Forecast class, calibrated probability, 95% CI, attention weights,
+            and a plain-English interpretation.
+
+    Requires models/lstm_forecast_v1.h5 to be present.
+    Run  python src/models/lstm_forecaster.py  to train the model first.
+    """
+    if not lstm_predictor.lstm_available():
+        err = lstm_predictor.get_load_error()
+        return JSONResponse(
+            status_code=501,
+            content={
+                "error": "LSTM forecasting model not available",
+                "detail": err or "Model not loaded",
+                "action": "Run  python src/models/lstm_forecaster.py  from the project root.",
+            },
+        )
+
+    try:
+        result = lstm_predictor.predict_forecast(req.sequence)
+        result["timestamp"] = _utcnow()
+        return JSONResponse(content=result)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Forecast inference failed: {exc}")
 
 
 @app.get("/api/example_csv")

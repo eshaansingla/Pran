@@ -1,4 +1,4 @@
-import type { BatchResult, ModelInfo, SinglePrediction } from '../types'
+import type { BatchResult, ForecastResult, ModelInfo, SinglePrediction } from '../types'
 
 const BASE = '/api'
 
@@ -40,4 +40,19 @@ export async function fetchExampleCsv(): Promise<string> {
   const res = await fetch(`${BASE}/example_csv`)
   const data = await handleResponse<{ csv: string }>(res)
   return data.csv
+}
+
+export async function fetchLstmInfo(): Promise<Record<string, unknown> | null> {
+  const res = await fetch(`${BASE}/lstm_info`)
+  if (!res.ok) return null
+  return res.json()
+}
+
+export async function predictForecast(sequence: number[][]): Promise<ForecastResult> {
+  const res = await fetch(`${BASE}/predict_forecast`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sequence }),
+  })
+  return handleResponse<ForecastResult>(res)
 }

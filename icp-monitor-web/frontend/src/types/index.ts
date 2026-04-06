@@ -59,6 +59,7 @@ export interface ModelInfo {
   model_type: string
   classifier: string
   threshold_mmhg: number
+  calibrated?: boolean
   metrics: ModelMetrics
   training_date: string
   training_data: {
@@ -81,6 +82,38 @@ export interface TrendPoint {
   class: ICPClass
   confidence: number
   label: string
+}
+
+// ── LSTM Forecasting ──────────────────────────────────────────────────────────
+
+export interface AttentionHighlight {
+  timestep: number      // negative = N windows before now (e.g. -5 = 50 sec ago)
+  importance: number    // 0–1
+}
+
+export interface FeatureHighlight {
+  name: string
+  importance: number    // 0–1
+}
+
+export interface ForecastResult {
+  class: ICPClass
+  class_name: ICPClassName
+  probability: number
+  probabilities: [number, number]
+  confidence_label: 'High' | 'Medium' | 'Low'
+  ci_lower: number
+  ci_upper: number
+  std: number
+  horizon_minutes: number
+  interpretation: string
+  attention_weights: number[]     // length = seq_len (30), sum ≈ 1
+  attention_highlights: AttentionHighlight[]
+  feature_highlights: FeatureHighlight[]
+  model_version: string
+  seq_len: number
+  threshold: number
+  timestamp: string
 }
 
 export type ActiveTab = 'dashboard' | 'forecasting' | 'model'

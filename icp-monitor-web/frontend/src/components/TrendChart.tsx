@@ -1,15 +1,20 @@
 import {
-  LineChart, Line, XAxis, YAxis, Tooltip, ReferenceLine,
-  ReferenceArea, ResponsiveContainer, CartesianGrid,
+  ComposedChart, Line, XAxis, YAxis, Tooltip, ReferenceLine,
+  ReferenceArea, ResponsiveContainer, CartesianGrid, Legend,
 } from 'recharts'
 import type { TrendPoint } from '../types'
 import { useStore } from '../store/useStore'
+import { probToICP } from '../utils/formatters'
 
 interface Props {
   data: TrendPoint[]
 }
 
-function CustomDot(props: { cx?: number; cy?: number; payload?: TrendPoint; isDark?: boolean }) {
+interface ChartPoint extends TrendPoint {
+  icp: number  // estimated ICP in mmHg
+}
+
+function CustomDot(props: { cx?: number; cy?: number; payload?: ChartPoint; isDark?: boolean }) {
   const { cx, cy, payload, isDark } = props
   if (!payload || cx === undefined || cy === undefined) return null
   const color = payload.class === 0
@@ -20,7 +25,7 @@ function CustomDot(props: { cx?: number; cy?: number; payload?: TrendPoint; isDa
 
 function CustomTooltip({ active, payload, isDark }: {
   active?: boolean
-  payload?: Array<{ payload: TrendPoint }>
+  payload?: Array<{ payload: ChartPoint }>
   isDark?: boolean
 }) {
   if (!active || !payload?.[0]) return null
@@ -36,6 +41,9 @@ function CustomTooltip({ active, payload, isDark }: {
       <p className={isDark ? 'text-slate-500' : 'text-clinical-text-muted'}>{p.timestamp}</p>
       <p className={`tabular-nums ${isDark ? 'text-slate-200' : 'text-clinical-text-primary'}`}>
         Confidence: {(p.confidence * 100).toFixed(1)}%
+      </p>
+      <p className={`tabular-nums font-semibold ${isDark ? 'text-amber-400' : 'text-amber-600'}`}>
+        Est. ICP: ~{p.icp.toFixed(0)} mmHg
       </p>
     </div>
   )
@@ -55,19 +63,25 @@ export default function TrendChart({ data }: Props) {
     )
   }
 
-  const visible    = data.slice(-180)
+  const visible: ChartPoint[] = data.slice(-180).map(pt => ({
+    ...pt,
+    // P(abnormal) = confidence if class=1, else 1-confidence
+    icp: probToICP(pt.class === 1 ? pt.confidence : 1 - pt.confidence),
+  }))
+
   const tickColor  = isDark ? '#718096' : '#718096'
   const gridColor  = isDark ? '#2D3748' : '#E2E8F0'
   const normalFill = isDark ? '#064E3B' : '#ECFDF5'
   const abnFill    = isDark ? '#450A0A' : '#FEF2F2'
   const lineColor  = isDark ? '#3B82F6' : '#2C5282'
+  const icpColor   = isDark ? '#F59E0B' : '#D97706'
 
   return (
     <div aria-label="ICP classification trend chart" role="img">
-      <ResponsiveContainer width="100%" height={220}>
-        <LineChart data={visible} margin={{ top: 8, right: 8, left: 0, bottom: 4 }}>
-          <ReferenceArea y1={-0.2} y2={0.5} fill={normalFill} fillOpacity={0.6} />
-          <ReferenceArea y1={0.5}  y2={1.2} fill={abnFill}    fillOpacity={0.6} />
+      <ResponsiveContainer width="100%" height={230}>
+        <ComposedChart data={visible} margin={{ top: 8, right: 44, left: 0, bottom: 4 }}>
+          <ReferenceArea yAxisId="class" y1={-0.2} y2={0.5} fill={normalFill} fillOpacity={0.6} />
+          <ReferenceArea yAxisId="class" y1={0.5}  y2={1.2} fill={abnFill}    fillOpacity={0.6} />
 
           <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
 
@@ -78,7 +92,10 @@ export default function TrendChart({ data }: Props) {
             tickLine={false}
             axisLine={{ stroke: gridColor }}
           />
+
+          {/* Left axis: classification */}
           <YAxis
+            yAxisId="class"
             domain={[-0.2, 1.2]}
             ticks={Y_TICKS}
             tickFormatter={v => Y_LABELS[v] ?? ''}
@@ -88,11 +105,31 @@ export default function TrendChart({ data }: Props) {
             width={58}
           />
 
-          <ReferenceLine y={0.5} stroke={isDark ? '#EF4444' : '#DC2626'} strokeDasharray="4 3" strokeOpacity={0.5} />
+          {/* Right axis: estimated ICP mmHg */}
+          <YAxis
+            yAxisId="icp"
+            orientation="right"
+            domain={[0, 40]}
+            ticks={[0, 5, 10, 15, 20, 25, 30, 35, 40]}
+            tickFormatter={v => `${v}`}
+            tick={{ fontSize: 9, fill: icpColor }}
+            tickLine={false}
+            axisLine={false}
+            width={36}
+            label={{ value: 'mmHg', angle: 90, position: 'insideRight', offset: 10, fontSize: 9, fill: icpColor }}
+          />
+
+          <ReferenceLine yAxisId="class" y={0.5}
+            stroke={isDark ? '#EF4444' : '#DC2626'} strokeDasharray="4 3" strokeOpacity={0.5} />
+          <ReferenceLine yAxisId="icp" y={15}
+            stroke={isDark ? '#F59E0B' : '#D97706'} strokeDasharray="3 2" strokeOpacity={0.4}
+            label={{ value: '15', fontSize: 8, fill: icpColor, position: 'right' }} />
 
           <Tooltip content={<CustomTooltip isDark={isDark} />} />
 
+          {/* Classification step line */}
           <Line
+            yAxisId="class"
             type="stepAfter"
             dataKey="class"
             stroke={lineColor}
@@ -100,8 +137,26 @@ export default function TrendChart({ data }: Props) {
             dot={<CustomDot isDark={isDark} />}
             activeDot={{ r: 6, strokeWidth: 2, stroke: isDark ? '#1A202C' : '#fff' }}
             isAnimationActive={false}
+            name="Classification"
           />
-        </LineChart>
+
+          {/* Estimated ICP line */}
+          <Line
+            yAxisId="icp"
+            dataKey="icp"
+            stroke={icpColor}
+            strokeWidth={1.5}
+            strokeDasharray="4 2"
+            dot={false}
+            isAnimationActive={false}
+            name="Est. ICP (mmHg)"
+          />
+
+          <Legend
+            wrapperStyle={{ fontSize: 10, paddingTop: 4 }}
+            iconType="line"
+          />
+        </ComposedChart>
       </ResponsiveContainer>
     </div>
   )

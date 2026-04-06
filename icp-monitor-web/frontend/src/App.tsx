@@ -13,11 +13,12 @@ interface TabDef {
   label: string
   Icon: typeof Activity
   badge?: string
+  badgeVariant?: 'amber' | 'blue' | 'green'
 }
 
 const TABS: TabDef[] = [
   { id: 'dashboard',   label: 'ICP Classification', Icon: Activity },
-  { id: 'forecasting', label: 'ICP Forecasting',     Icon: TrendingUp, badge: 'v2.0' },
+  { id: 'forecasting', label: 'ICP Forecasting',     Icon: TrendingUp, badge: 'LSTM',  badgeVariant: 'blue' },
   { id: 'model',       label: 'Model Info',           Icon: Info },
 ]
 
@@ -27,32 +28,25 @@ export default function App() {
   const [time, setTime]         = useState('')
   const [showHelp, setShowHelp] = useState(false)
 
-  // Apply dark class on mount + when isDark changes
   useEffect(() => {
     document.documentElement.classList.toggle('dark', isDark)
   }, [isDark])
 
-  // Init dark from localStorage if Zustand hasn't restored it yet
   useEffect(() => {
     const stored = localStorage.getItem('icp-monitor-store')
-    if (!stored) {
-      setDark(window.matchMedia('(prefers-color-scheme: dark)').matches)
-    }
+    if (!stored) setDark(window.matchMedia('(prefers-color-scheme: dark)').matches)
   }, [])
 
-  // Live clock
   useEffect(() => {
     const fmt = () => new Date().toLocaleString('en-GB', {
       year: 'numeric', month: '2-digit', day: '2-digit',
-      hour: '2-digit', minute: '2-digit', second: '2-digit',
-      hour12: false,
+      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
     }).replace(',', '')
     setTime(fmt())
     const id = setInterval(() => setTime(fmt()), 1000)
     return () => clearInterval(id)
   }, [])
 
-  // Keyboard shortcuts
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return
@@ -66,54 +60,53 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler)
   }, [toggleDark])
 
+  const badgeClass: Record<string, string> = {
+    amber: 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400',
+    blue:  'bg-blue-100  dark:bg-blue-900/40  text-blue-700  dark:text-blue-400',
+    green: 'bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-400',
+  }
+
   return (
     <div className="min-h-screen bg-clinical-background dark:bg-slate-900 flex flex-col transition-colors duration-200">
-      {/* Skip to content */}
-      <a
-        href="#main-content"
-        className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-clinical-primary focus:text-white focus:rounded"
-      >
+      <a href="#main-content" className="sr-only focus:not-sr-only focus:absolute focus:top-2 focus:left-2 focus:z-50 focus:px-4 focus:py-2 focus:bg-clinical-primary focus:text-white focus:rounded">
         Skip to content
       </a>
 
-      {/* Top navigation */}
-      <header className="bg-clinical-primary dark:bg-slate-800 text-white shadow-md transition-colors duration-200" role="banner">
+      {/* Header */}
+      <header className="bg-gradient-to-r from-[#1e3a5f] to-[#2C5282] dark:from-slate-900 dark:to-slate-800 text-white shadow-lg transition-colors duration-200" role="banner">
         <div className="max-w-screen-xl mx-auto px-5 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <Activity size={20} strokeWidth={2} aria-hidden="true" />
+            <div className="p-1.5 bg-white/10 rounded-lg">
+              <Activity size={18} strokeWidth={2} aria-hidden="true" />
+            </div>
             <div>
-              <span className="font-semibold text-sm tracking-tight">ICP Monitor</span>
-              <span className="ml-2 text-xs text-blue-200 dark:text-slate-400 font-normal">
+              <span className="font-bold text-sm tracking-tight">ICP Monitor</span>
+              <span className="ml-2 text-xs text-blue-200 dark:text-slate-400 font-normal hidden sm:inline">
                 Clinical Decision Support
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-3">
-            <span
-              className="text-xs font-mono text-blue-200 dark:text-slate-400 tabular-nums hidden sm:block"
-              aria-label="Current timestamp"
-              aria-live="polite"
-            >
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-mono text-blue-200/70 dark:text-slate-500 tabular-nums hidden lg:block">
               {time}
             </span>
-            <span className="text-xs bg-amber-500 text-white px-2 py-0.5 rounded font-medium hidden sm:inline">
+            <span className="text-xs bg-amber-500/90 text-white px-2 py-0.5 rounded-md font-semibold tracking-wide hidden sm:inline">
               RESEARCH
             </span>
+            <div className="h-4 w-px bg-white/20 mx-1 hidden sm:block" />
             <button
               onClick={() => setShowHelp(true)}
               aria-label="Keyboard shortcuts (Ctrl+H)"
-              title="Keyboard shortcuts (Ctrl+H)"
-              className="p-2 rounded-lg text-blue-200 dark:text-slate-400 hover:bg-white/10 dark:hover:bg-slate-700 transition-colors"
+              className="p-1.5 rounded-lg text-blue-200/80 hover:bg-white/10 hover:text-white transition-colors"
             >
-              <Keyboard size={16} />
+              <Keyboard size={15} />
             </button>
             <button
               onClick={toggleDark}
               aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-              title={isDark ? 'Light mode (Ctrl+D)' : 'Dark mode (Ctrl+D)'}
-              className="p-2 rounded-lg text-blue-200 dark:text-slate-400 hover:bg-white/10 dark:hover:bg-slate-700 transition-colors"
+              className="p-1.5 rounded-lg text-blue-200/80 hover:bg-white/10 hover:text-white transition-colors"
             >
-              {isDark ? <Sun size={16} /> : <Moon size={16} />}
+              {isDark ? <Sun size={15} /> : <Moon size={15} />}
             </button>
           </div>
         </div>
@@ -127,29 +120,33 @@ export default function App() {
       >
         <div className="max-w-screen-xl mx-auto px-5">
           <div className="flex" role="tablist">
-            {TABS.map(({ id, label, Icon, badge }) => (
+            {TABS.map(({ id, label, Icon, badge, badgeVariant = 'amber' }) => (
               <button
                 key={id}
                 role="tab"
                 aria-selected={tab === id}
-                aria-controls={`panel-${id}`}
                 onClick={() => setTab(id)}
                 className={`
-                  relative flex items-center gap-2 px-5 py-3.5 text-sm font-medium border-b-2
+                  relative flex items-center gap-2 px-5 py-3.5 text-sm font-medium
                   focus:outline-none focus-visible:ring-2 focus-visible:ring-clinical-primary focus-visible:ring-inset
-                  transition-colors duration-100
+                  transition-colors duration-150 group
                   ${tab === id
-                    ? 'border-clinical-primary dark:border-blue-400 text-clinical-primary dark:text-blue-400'
-                    : 'border-transparent text-clinical-text-secondary dark:text-slate-400 hover:text-clinical-text-primary dark:hover:text-slate-200 hover:border-gray-300 dark:hover:border-slate-600'}
+                    ? 'text-clinical-primary dark:text-blue-400'
+                    : 'text-clinical-text-secondary dark:text-slate-400 hover:text-clinical-text-primary dark:hover:text-slate-200'}
                 `}
               >
-                <Icon size={15} aria-hidden="true" />
+                <Icon size={14} aria-hidden="true" className="flex-shrink-0" />
                 {label}
                 {badge && (
-                  <span className="ml-1 text-2xs bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-400 px-1.5 py-0.5 rounded font-medium">
+                  <span className={`ml-0.5 text-2xs px-1.5 py-0.5 rounded font-semibold ${badgeClass[badgeVariant]}`}>
                     {badge}
                   </span>
                 )}
+                {/* Active underline */}
+                <span className={`
+                  absolute bottom-0 left-0 right-0 h-0.5 rounded-t-full transition-all duration-200
+                  ${tab === id ? 'bg-clinical-primary dark:bg-blue-400 opacity-100' : 'opacity-0 group-hover:opacity-30 bg-slate-400'}
+                `} />
               </button>
             ))}
           </div>
@@ -157,49 +154,44 @@ export default function App() {
       </nav>
 
       {/* Main content */}
-      <main
-        id="main-content"
-        className="flex-1 max-w-screen-xl mx-auto w-full px-5 py-5"
-        role="main"
-      >
-        <div id="panel-dashboard" role="tabpanel" hidden={tab !== 'dashboard'}>
-          {tab === 'dashboard' && <Dashboard />}
+      <main id="main-content" className="flex-1 max-w-screen-xl mx-auto w-full px-5 py-5" role="main">
+        <div id="panel-dashboard"   role="tabpanel" hidden={tab !== 'dashboard'}   className="animate-fade-in-up">
+          {tab === 'dashboard'   && <Dashboard />}
         </div>
-        <div id="panel-forecasting" role="tabpanel" hidden={tab !== 'forecasting'}>
+        <div id="panel-forecasting" role="tabpanel" hidden={tab !== 'forecasting'} className="animate-fade-in-up">
           {tab === 'forecasting' && <Forecasting />}
         </div>
-        <div id="panel-model" role="tabpanel" hidden={tab !== 'model'}>
-          {tab === 'model' && <ModelInfoPage />}
+        <div id="panel-model"       role="tabpanel" hidden={tab !== 'model'}       className="animate-fade-in-up">
+          {tab === 'model'       && <ModelInfoPage />}
         </div>
       </main>
 
       {/* Footer */}
       <footer className="border-t border-clinical-border dark:border-slate-700 bg-white dark:bg-slate-800 py-3 transition-colors duration-200" role="contentinfo">
         <div className="max-w-screen-xl mx-auto px-5 flex items-center gap-2 text-xs text-clinical-text-muted dark:text-slate-400">
-          <AlertTriangle size={12} className="text-amber-500 flex-shrink-0" aria-hidden="true" />
+          <AlertTriangle size={11} className="text-amber-500 flex-shrink-0" aria-hidden="true" />
           <span>
             <strong className="text-clinical-text-secondary dark:text-slate-300">Disclaimer:</strong>{' '}
-            Clinical decision support tool. Not FDA-approved. Not for autonomous diagnostic use.
+            Research prototype. Not FDA-approved. Not for autonomous diagnostic use.
             All decisions must be made by qualified clinicians.
-            XGBoost v2.0 — F1 = 0.88, AUC = 0.96 — Binary (Normal / Abnormal) — Trained 2026-04-03
+            {' '}XGBoost v2.2 — F1 0.877 · AUC 0.949 &nbsp;|&nbsp; LSTM v1.0 — F1 0.966 · AUC 0.984 &nbsp;|&nbsp; Trained 2026-04-05/06
           </span>
         </div>
       </footer>
 
-      {/* Keyboard help overlay */}
       {showHelp && <KeyboardHelp onClose={() => setShowHelp(false)} />}
 
-      {/* Toast notifications */}
       <Toaster
         position="top-right"
         toastOptions={{
           duration: 4000,
           style: {
             fontSize: '13px',
-            borderRadius: '8px',
+            borderRadius: '10px',
             background: isDark ? '#2D3748' : '#fff',
             color: isDark ? '#E2E8F0' : '#1A202C',
             border: isDark ? '1px solid #4A5568' : '1px solid #E2E8F0',
+            boxShadow: '0 4px 16px rgba(0,0,0,0.12)',
           },
         }}
       />
