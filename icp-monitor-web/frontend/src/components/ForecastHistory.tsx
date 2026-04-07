@@ -21,7 +21,7 @@ function ForecastRow({ f, onLoad, onDelete }: {
   onDelete: () => void
 }) {
   const isAbn = f.class === 1
-  const estICP = probToICP(f.probability)
+  const estICP = probToICP(f.probability, f.result.threshold)
 
   return (
     <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors">

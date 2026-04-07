@@ -6,13 +6,14 @@ import {
 import toast from 'react-hot-toast'
 import type { ForecastResult } from '../types'
 import { predictForecast, fetchModelInfo } from '../utils/api'
-import { probToICP } from '../utils/formatters'
+import { probToICP, icpGrade } from '../utils/formatters'
 import { fmtFeatureName } from '../utils/formatters'
 import { useStore } from '../store/useStore'
-import ForecastChart      from '../components/ForecastChart'
-import AttentionHeatmap   from '../components/AttentionHeatmap'
-import ForecastExportMenu from '../components/ForecastExportMenu'
-import ForecastHistory    from '../components/ForecastHistory'
+import ForecastChart          from '../components/ForecastChart'
+import AttentionHeatmap       from '../components/AttentionHeatmap'
+import ForecastExportMenu     from '../components/ForecastExportMenu'
+import ForecastHistory        from '../components/ForecastHistory'
+import ForecastWindowAnalysis from '../components/ForecastWindowAnalysis'
 
 const FEATURE_NAMES = [
   'cardiac_amplitude', 'cardiac_frequency', 'respiratory_amplitude',
@@ -22,7 +23,7 @@ const FEATURE_NAMES = [
 // ─── CSV parse ────────────────────────────────────────────────────────────────
 
 function parseSequenceCsv(text: string): { rows: number[][] | null; error: string | null } {
-  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0)
+  const lines     = text.split('\n').map(l => l.trim()).filter(l => l.length > 0)
   const dataLines = lines[0].toLowerCase().includes('cardiac') ? lines.slice(1) : lines
 
   if (dataLines.length < 30) {
@@ -43,23 +44,24 @@ function parseSequenceCsv(text: string): { rows: number[][] | null; error: strin
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
 function ForecastCard({ result }: { result: ForecastResult }) {
-  const isAbnormal = result.class === 1
-  const pct        = (result.probability * 100).toFixed(1)
-  const normalPct  = (result.probabilities[0] * 100).toFixed(1)
-  const abnPct     = (result.probabilities[1] * 100).toFixed(1)
-  const ciLoPct    = (result.ci_lower  * 100).toFixed(1)
-  const ciHiPct    = (result.ci_upper  * 100).toFixed(1)
-  const estICP     = probToICP(result.probability)
-  const icpLo      = probToICP(result.ci_lower)
-  const icpHi      = probToICP(result.ci_upper)
+  const isAbn   = result.class === 1
+  const pct     = (result.probability * 100).toFixed(1)
+  const nrmPct  = (result.probabilities[0] * 100).toFixed(1)
+  const abnPct  = (result.probabilities[1] * 100).toFixed(1)
+  const ciLoPct = (result.ci_lower  * 100).toFixed(1)
+  const ciHiPct = (result.ci_upper  * 100).toFixed(1)
 
-  const cardBg     = isAbnormal
+  const thr    = result.threshold
+  const estICP = probToICP(result.probability, thr)
+  const icpLo  = probToICP(result.ci_lower,    thr)
+  const icpHi  = probToICP(result.ci_upper,    thr)
+  const grade  = icpGrade(estICP)
+
+  const cardBg     = isAbn
     ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-700'
     : 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-700'
-  const titleColor = isAbnormal
-    ? 'text-red-700 dark:text-red-400'
-    : 'text-emerald-700 dark:text-emerald-400'
-  const barColor   = isAbnormal ? 'bg-red-500' : 'bg-emerald-500'
+  const titleColor = isAbn ? 'text-red-700 dark:text-red-400' : 'text-emerald-700 dark:text-emerald-400'
+  const barColor   = isAbn ? 'bg-red-500' : 'bg-emerald-500'
 
   return (
     <div className={`rounded-xl border p-4 ${cardBg}`}>
@@ -70,13 +72,13 @@ function ForecastCard({ result }: { result: ForecastResult }) {
           </p>
           <p className={`text-2xl font-bold mt-0.5 ${titleColor}`}>{result.class_name}</p>
           <p className="text-xs text-clinical-text-muted dark:text-slate-500 mt-0.5">
-            Confidence: {result.confidence_label}
+            {result.confidence_label} confidence · threshold {result.threshold.toFixed(3)}
           </p>
         </div>
-        <div className={`p-2.5 rounded-lg ${isAbnormal ? 'bg-red-100 dark:bg-red-900/40' : 'bg-emerald-100 dark:bg-emerald-900/40'}`}>
-          {isAbnormal
-            ? <AlertTriangle size={24} className="text-red-600 dark:text-red-400" />
-            : <CheckCircle2  size={24} className="text-emerald-600 dark:text-emerald-400" />
+        <div className={`p-2.5 rounded-lg ${isAbn ? 'bg-red-100 dark:bg-red-900/40' : 'bg-emerald-100 dark:bg-emerald-900/40'}`}>
+          {isAbn
+            ? <AlertTriangle size={22} className="text-red-600 dark:text-red-400" />
+            : <CheckCircle2  size={22} className="text-emerald-600 dark:text-emerald-400" />
           }
         </div>
       </div>
@@ -84,24 +86,39 @@ function ForecastCard({ result }: { result: ForecastResult }) {
       {/* Probability bar */}
       <div className="mb-3">
         <div className="flex justify-between text-xs mb-1">
-          <span className="text-emerald-700 dark:text-emerald-400 font-medium">Normal {normalPct}%</span>
+          <span className="text-emerald-700 dark:text-emerald-400 font-medium">Normal {nrmPct}%</span>
           <span className="text-red-700 dark:text-red-400 font-medium">Abnormal {abnPct}%</span>
         </div>
         <div className="h-2 rounded-full bg-emerald-200 dark:bg-emerald-900/40 overflow-hidden">
-          <div className={`h-full rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />
+          <div className={`h-full rounded-full ${barColor}`} style={{ width: `${pct}%` }} />
         </div>
         <p className="text-xs text-clinical-text-muted dark:text-slate-500 text-center mt-1">
-          P(Abnormal) = {pct}%  ·  95% CI [{ciLoPct}%, {ciHiPct}%]
+          P(Abnormal) = {pct}% · 95% CI [{ciLoPct}%, {ciHiPct}%]
         </p>
       </div>
 
-      {/* Estimated ICP */}
-      <div className={`rounded-lg px-3 py-2 mb-3 ${isAbnormal ? 'bg-red-100/60 dark:bg-red-900/30' : 'bg-emerald-100/60 dark:bg-emerald-900/30'}`}>
-        <p className="text-xs text-clinical-text-muted dark:text-slate-400 mb-0.5">Estimated ICP (mmHg)</p>
-        <p className={`text-xl font-bold tabular-nums ${titleColor}`}>
-          ~{estICP.toFixed(0)} mmHg
+      {/* Estimated ICP — prominent */}
+      <div className="rounded-lg border border-amber-200 dark:border-amber-700
+        bg-amber-50 dark:bg-amber-900/20 px-3 py-2.5 mb-3">
+        <p className="text-xs text-clinical-text-muted dark:text-slate-400 mb-0.5">
+          Estimated ICP (mmHg)
         </p>
-        <p className="text-2xs text-clinical-text-muted dark:text-slate-500">
+        <div className="flex items-baseline gap-2">
+          <p className="text-2xl font-bold tabular-nums text-amber-700 dark:text-amber-400">
+            ~{estICP.toFixed(0)}
+            <span className="text-sm font-normal ml-1">mmHg</span>
+          </p>
+          <span
+            className="text-xs font-semibold px-1.5 py-0.5 rounded"
+            style={{
+              backgroundColor: grade.color + '20',
+              color: grade.color,
+            }}
+          >
+            {grade.label}
+          </span>
+        </div>
+        <p className="text-2xs text-clinical-text-muted dark:text-slate-500 mt-0.5">
           95% CI: ~{icpLo.toFixed(0)}–{icpHi.toFixed(0)} mmHg · threshold = 15 mmHg
         </p>
       </div>
@@ -116,11 +133,12 @@ function ForecastCard({ result }: { result: ForecastResult }) {
 
 
 function EarlyWarningBanner({ result }: { result: ForecastResult }) {
-  if (result.class !== 1 || result.probability < 0.6) return null
+  if (result.class !== 1 || result.probability < result.threshold) return null
+  const estICP = probToICP(result.probability, result.threshold)
   return (
     <div role="alert" className="rounded-xl border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/30 p-4">
       <div className="flex items-center gap-2 mb-2">
-        <AlertTriangle size={18} className="text-red-600 dark:text-red-400 flex-shrink-0 animate-pulse-critical" />
+        <AlertTriangle size={16} className="text-red-600 dark:text-red-400 flex-shrink-0 animate-pulse-critical" />
         <h3 className="text-sm font-bold text-red-700 dark:text-red-400 uppercase tracking-wide">
           Early ICP Elevation Warning
         </h3>
@@ -128,8 +146,8 @@ function EarlyWarningBanner({ result }: { result: ForecastResult }) {
       <p className="text-sm text-red-700 dark:text-red-300 mb-3">
         LSTM model forecasts <strong>Abnormal ICP</strong> within approximately{' '}
         <strong>{result.horizon_minutes} minutes</strong> with{' '}
-        {(result.probability * 100).toFixed(0)}% probability
-        (est. ~{probToICP(result.probability).toFixed(0)} mmHg).
+        <strong>{(result.probability * 100).toFixed(0)}%</strong> probability
+        — estimated ~<strong>{estICP.toFixed(0)} mmHg</strong> (threshold: 15 mmHg).
       </p>
       <ul className="text-xs text-red-700 dark:text-red-400 space-y-1 list-disc list-inside">
         <li>Verify patient positioning (head elevated 30°)</li>
@@ -156,14 +174,14 @@ function FeatureHighlights({ result }: { result: ForecastResult }) {
         {result.feature_highlights.map((fh, i) => (
           <div key={fh.name} className="flex items-center gap-2">
             <span className="w-4 h-4 rounded-full text-2xs flex items-center justify-center font-semibold
-              bg-clinical-primary dark:bg-blue-600 text-white flex-shrink-0">
+              bg-purple-600 dark:bg-purple-500 text-white flex-shrink-0">
               {i + 1}
             </span>
             <span className="text-xs text-clinical-text-secondary dark:text-slate-300 flex-1">
               {fmtFeatureName(fh.name)}
             </span>
             <div className="w-16 h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
-              <div className="h-full rounded-full bg-clinical-primary dark:bg-blue-500"
+              <div className="h-full rounded-full bg-purple-500 dark:bg-purple-400"
                 style={{ width: `${(fh.importance * 100).toFixed(0)}%` }} />
             </div>
             <span className="text-2xs tabular-nums text-clinical-text-muted dark:text-slate-500 w-8 text-right">
@@ -195,9 +213,11 @@ function SessionMeta({ result, sequence, fileName }: {
         {[
           { label: 'File',       value: fileName },
           { label: 'Timestamp', value: now },
-          { label: 'Windows',   value: `${sequence.length} (${(sequence.length * 10 / 60).toFixed(1)} min history)` },
+          { label: 'Windows',   value: `${sequence.length} (${(sequence.length * 10 / 60).toFixed(1)} min)` },
           { label: 'Model',     value: `LSTM v${result.model_version}` },
-          { label: 'Threshold', value: `${result.threshold.toFixed(4)} (F1-opt.)` },
+          { label: 'Horizon',   value: `${result.horizon_minutes} min ahead` },
+          { label: 'Threshold', value: `${result.threshold.toFixed(3)} (F1-opt.)` },
+          { label: 'MC Passes', value: '20 (dropout)' },
         ].map(({ label, value }) => (
           <div key={label} className="flex justify-between text-xs">
             <span className="text-clinical-text-muted dark:text-slate-500">{label}</span>
@@ -280,7 +300,6 @@ export default function Forecasting() {
   }
 
   function reloadForecast(res: ForecastResult, fname: string, seqLen: number) {
-    // Reconstruct a placeholder sequence of the right length (no raw data stored)
     setResult(res)
     setFileName(fname)
     setSequence(Array.from({ length: seqLen }, () => Array(6).fill(0) as number[]))
@@ -297,11 +316,10 @@ export default function Forecasting() {
             ICP Trend Forecasting
           </h1>
           <p className="text-sm text-clinical-text-muted dark:text-slate-400 mt-0.5">
-            LSTM — {15}-minute ahead prediction · BiLSTM(64→32) + self-attention · MC Dropout
+            LSTM — {15}-minute ahead prediction · BiLSTM(64→32) + self-attention · MC Dropout (20 passes)
           </p>
         </div>
 
-        {/* Drop zone */}
         <div
           onDrop={onDrop}
           onDragOver={e => e.preventDefault()}
@@ -317,7 +335,7 @@ export default function Forecasting() {
             Drop sequence CSV here or click to browse
           </p>
           <p className="text-xs text-clinical-text-muted dark:text-slate-400 mt-1">
-            Minimum 30 consecutive rows (each = one 10-second window) · 6 feature columns
+            Minimum 30 consecutive rows · each row = one 10-second window · 6 feature columns
           </p>
           <p className="text-xs font-mono text-clinical-text-muted dark:text-slate-500 mt-2">
             {FEATURE_NAMES.join(', ')}
@@ -332,7 +350,6 @@ export default function Forecasting() {
           </div>
         )}
 
-        {/* CSV format guide */}
         <div className="rounded-xl border border-clinical-border dark:border-slate-700 bg-white dark:bg-slate-800 p-4 shadow-sm">
           <div className="flex items-center gap-2 mb-2">
             <Info size={13} className="text-purple-600 dark:text-purple-400" />
@@ -351,7 +368,6 @@ export default function Forecasting() {
           </p>
         </div>
 
-        {/* Forecast history */}
         <ForecastHistory onLoad={reloadForecast} />
       </div>
     )
@@ -366,7 +382,7 @@ export default function Forecasting() {
           Running LSTM forecast…
         </p>
         <p className="text-xs text-clinical-text-muted dark:text-slate-400">
-          Monte Carlo dropout · 20 stochastic passes · computing uncertainty
+          Monte Carlo dropout · 20 stochastic passes · computing uncertainty bounds
         </p>
       </div>
     )
@@ -375,9 +391,9 @@ export default function Forecasting() {
   // ── Results ───────────────────────────────────────────────────────────────
   if (state === 'done' && result && sequence) {
     return (
-      <div className="max-w-4xl space-y-4 animate-fade-in-up">
+      <div className="max-w-5xl space-y-4 animate-fade-in-up">
 
-        {/* Header row */}
+        {/* Header */}
         <div className="flex items-start justify-between">
           <div>
             <h1 className="text-base font-semibold text-clinical-text-primary dark:text-slate-100">
@@ -386,7 +402,7 @@ export default function Forecasting() {
             <p className="text-xs text-clinical-text-muted dark:text-slate-400 mt-0.5 flex items-center gap-1">
               <Clock size={10} />
               {fileName} · {sequence.length} windows ({(sequence.length * 10 / 60).toFixed(1)} min)
-              · LSTM v{result.model_version} · {result.horizon_minutes}-min ahead
+              · LSTM v{result.model_version} · +{result.horizon_minutes} min ahead
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -405,9 +421,9 @@ export default function Forecasting() {
         {/* Early warning */}
         <EarlyWarningBanner result={result} />
 
-        {/* Main 5-col grid: cards (2) + chart (3) */}
+        {/* Main grid: 2-col cards | 3-col chart */}
         <div className="grid grid-cols-5 gap-4">
-          <div className="col-span-2 space-y-4">
+          <div className="col-span-2 space-y-3">
             <ForecastCard result={result} />
             <div className="bg-white dark:bg-slate-800 border border-clinical-border dark:border-slate-600 rounded-xl p-4 shadow-sm">
               <FeatureHighlights result={result} />
@@ -416,14 +432,21 @@ export default function Forecasting() {
           </div>
 
           <div className="col-span-3 bg-white dark:bg-slate-800 border border-clinical-border dark:border-slate-600 rounded-xl p-4 shadow-sm">
-            <h3 className="text-xs font-semibold text-clinical-text-secondary dark:text-slate-300 uppercase tracking-wide mb-3">
-              ICP Probability &amp; Estimated mmHg Trajectory
+            <h3 className="text-xs font-semibold text-clinical-text-secondary dark:text-slate-300 uppercase tracking-wide mb-0.5">
+              Estimated ICP (mmHg) — Last 5 min History + 30-min Forecast
             </h3>
+            <p className="text-2xs text-clinical-text-muted dark:text-slate-500 mb-3">
+              Amber = MAP-based historical ICP · Dashed = LSTM forecast
+              {sequence.length > 30 && ` · Model used full ${(sequence.length * 10 / 60).toFixed(1)}-min input (${sequence.length} windows)`}
+            </p>
             <ForecastChart sequence={sequence} result={result} />
           </div>
         </div>
 
-        {/* Attention heatmap (collapsible) */}
+        {/* Window-by-window analysis (LSTM equivalent of XGBoost window inspector) */}
+        <ForecastWindowAnalysis sequence={sequence} result={result} />
+
+        {/* Attention heatmap */}
         <div className="bg-white dark:bg-slate-800 border border-clinical-border dark:border-slate-600 rounded-xl shadow-sm overflow-hidden">
           <button
             onClick={() => setShowHeatmap(h => !h)}
@@ -452,8 +475,9 @@ export default function Forecasting() {
         <div className="rounded-xl border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-3">
           <p className="text-xs text-amber-700 dark:text-amber-400">
             <strong>Research prototype.</strong> LSTM trained on CHARIS + MIMIC-III research data.
-            Estimated ICP values are probabilistic approximations — not direct measurements.
-            Requires clinical validation. Not FDA-approved. All decisions must be made by qualified clinicians.
+            Estimated ICP values use CPP formula (MAP − 70 mmHg, Rosner 1990) and are probabilistic
+            approximations — not direct measurements. Requires clinical validation. Not FDA-approved.
+            All decisions must be made by qualified clinicians.
           </p>
         </div>
       </div>

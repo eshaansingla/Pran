@@ -8,6 +8,7 @@ import { probToICP } from '../utils/formatters'
 
 interface Props {
   data: TrendPoint[]
+  threshold?: number   // model decision threshold (default 0.545 for XGBoost)
 }
 
 interface ChartPoint extends TrendPoint {
@@ -52,7 +53,7 @@ function CustomTooltip({ active, payload, isDark }: {
 const Y_TICKS  = [0, 1]
 const Y_LABELS: Record<number, string> = { 0: 'Normal', 1: 'Abnormal' }
 
-export default function TrendChart({ data }: Props) {
+export default function TrendChart({ data, threshold = 0.545 }: Props) {
   const { isDark } = useStore()
 
   if (data.length === 0) {
@@ -65,8 +66,8 @@ export default function TrendChart({ data }: Props) {
 
   const visible: ChartPoint[] = data.slice(-180).map(pt => ({
     ...pt,
-    // P(abnormal) = confidence if class=1, else 1-confidence
-    icp: probToICP(pt.class === 1 ? pt.confidence : 1 - pt.confidence),
+    // P(abnormal): confidence when class=1, else (1 − confidence)
+    icp: probToICP(pt.class === 1 ? pt.confidence : 1 - pt.confidence, threshold),
   }))
 
   const tickColor  = isDark ? '#718096' : '#718096'

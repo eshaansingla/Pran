@@ -1,336 +1,367 @@
 import {
   ComposedChart, Line, Area, XAxis, YAxis, Tooltip, ReferenceLine,
-  ReferenceArea, ResponsiveContainer, CartesianGrid, Legend,
+  ReferenceArea, ResponsiveContainer, CartesianGrid,
 } from 'recharts'
 import type { ForecastResult } from '../types'
 import { useStore } from '../store/useStore'
-import { probToICP } from '../utils/formatters'
+import { probToICP, mapToICP, icpGrade } from '../utils/formatters'
+
+// ── Scaler constants from lstm_meta.json ──────────────────────────────────────
+// Feature index 5 = mean_arterial_pressure
+const MAP_MEAN = 88.352
+const MAP_STD  = 7.850
+
+/**
+ * Auto-detect whether MAP value is a z-score or raw mmHg.
+ * Physiological MAP is always ≥ 50 mmHg. If value is < 10, it's almost
+ * certainly a z-score — reconstruct using training scaler.
+ */
+function toRawMAP(val: number): number {
+  if (val > 50) return val               // already raw mmHg
+  return val * MAP_STD + MAP_MEAN        // z-score → raw mmHg
+}
 
 interface Props {
-  sequence:   number[][]   // raw feature rows (30 × 6)
-  result:     ForecastResult
+  sequence: number[][]   // raw N × 6 windows from uploaded CSV
+  result:   ForecastResult
 }
 
 interface ChartPoint {
-  t: number       // relative time in seconds (-290 … 0 = history, +900 = forecast)
-  label: string
-  histProb?: number
-  forecastProb?: number
-  ciBand?: [number, number]
-  ciLower?: number
-  ciUpper?: number
-  histICP?: number      // estimated ICP mmHg from histProb
-  forecastICP?: number  // estimated ICP mmHg from forecastProb
-  ciLowerICP?: number
-  ciUpperICP?: number
+  tMin:         number
+  label:        string
+  histICP?:     number
+  forecastICP?: number
+  ciLower?:     number
+  ciUpper?:     number
 }
 
-// Approximate per-window abnormal probability from raw features using
-// a simple heuristic (MAP z-score).  This gives a rough historical trace
-// without calling the XGBoost API on every window.
-function estimateHistorical(sequence: number[][]): number[] {
-  if (sequence.length === 0) return []
-  const n = sequence.length
-  const f = 6
-
-  // Compute per-feature mean and std over the sequence
-  const mean = Array(f).fill(0) as number[]
-  const std  = Array(f).fill(1) as number[]
-  for (let j = 0; j < f; j++) {
-    const vals = sequence.map(row => row[j])
-    mean[j] = vals.reduce((s, v) => s + v, 0) / n
-    const variance = vals.reduce((s, v) => s + (v - mean[j]) ** 2, 0) / n
-    std[j]  = Math.sqrt(variance) || 1
-  }
-
-  // Soft sigmoid applied to mean absolute z-score — gives 0–1 "abnormality proxy"
-  return sequence.map(row => {
-    const z = row.reduce((s, v, j) => s + Math.abs((v - mean[j]) / std[j]), 0) / f
-    return 1 / (1 + Math.exp(-2.5 * (z - 1.5)))
-  })
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Build chart data
+// Historical: last 30 windows (5 min) of MAP-based ICP — fixed [-5, 0] window
+// Forecast:   LSTM probability → ICP, interpolated lastHistICP → targetICP
+// ─────────────────────────────────────────────────────────────────────────────
+const HIST_DISPLAY = 30   // always show the last 30 windows = 5 min of history
 
 function buildChartData(sequence: number[][], result: ForecastResult): ChartPoint[] {
-  const histProbs = estimateHistorical(sequence)
-  const seqLen    = sequence.length
-  const points: ChartPoint[] = []
+  const threshold  = result.threshold
+  const hasReal    = sequence.some(row => row.some(v => v !== 0))
 
-  // Historical: t = -(seqLen-1)*10 … 0 seconds
-  histProbs.forEach((p, i) => {
-    const tSec = -(seqLen - 1 - i) * 10
-    points.push({
-      t:        tSec,
-      label:    tSec === 0 ? 'Now' : `${tSec}s`,
-      histProb: +p.toFixed(3),
-      histICP:  +probToICP(p).toFixed(1),
-    })
+  // Only display the last HIST_DISPLAY windows in the chart
+  const displaySeq = sequence.slice(-HIST_DISPLAY)
+  const dispLen    = displaySeq.length   // could be < 30 if sequence is short
+
+  // Step 1: Raw ICP per displayed window
+  const rawICPs = displaySeq.map(row => {
+    if (!hasReal) return 12   // fallback for reloaded (no CSV)
+    const rawMap = toRawMAP(row[5])
+    return mapToICP(rawMap)   // MAP − 70, clamped [5, 40]
   })
 
-  // Bridge: at t=0 also start the forecast line (0 CI width = no uncertainty yet)
-  const lastHistProb = histProbs[seqLen - 1]
-  const fSec = result.horizon_minutes * 60
-  const bridgePt = points[points.length - 1]
-  bridgePt.forecastProb = +lastHistProb.toFixed(3)
-  bridgePt.forecastICP  = +probToICP(lastHistProb).toFixed(1)
-  bridgePt.ciLower      = +lastHistProb.toFixed(3)
-  bridgePt.ciUpper      = +lastHistProb.toFixed(3)
-  bridgePt.ciLowerICP   = +probToICP(lastHistProb).toFixed(1)
-  bridgePt.ciUpperICP   = +probToICP(lastHistProb).toFixed(1)
+  // Step 2: 3-point rolling average to smooth natural noise
+  const smooth = rawICPs.map((_, i) => {
+    const s = Math.max(0, i - 1)
+    const e = Math.min(rawICPs.length, i + 2)
+    const sl = rawICPs.slice(s, e)
+    return sl.reduce((a, b) => a + b, 0) / sl.length
+  })
 
-  // Interpolated forecast points: t = fSec/N … fSec
-  // CI band widens linearly from 0 at t=0 to full width at t=fSec
-  const N = 9
-  const targetProb = result.probability
-  const fullHalf   = (result.ci_upper - result.ci_lower) / 2
-  for (let i = 1; i <= N; i++) {
-    const alpha = i / N
-    const tSec  = Math.round(alpha * fSec)
-    const prob  = lastHistProb + alpha * (targetProb - lastHistProb)
-    const half  = alpha * fullHalf
-    const cLo   = +Math.max(0, prob - half).toFixed(3)
-    const cHi   = +Math.min(1, prob + half).toFixed(3)
+  // Step 3: Historical points — always anchor last point at tMin=0
+  const points: ChartPoint[] = []
+  for (let i = 0; i < dispLen; i++) {
+    const tMin = -(dispLen - 1 - i) * 10 / 60   // ≤ 0 minutes
+    const isTickMin = Math.round(tMin) === tMin
     points.push({
-      t:            tSec,
-      label:        i === N ? `+${result.horizon_minutes} min` : `+${(tSec / 60).toFixed(1)}m`,
-      forecastProb: +prob.toFixed(3),
-      forecastICP:  +probToICP(prob).toFixed(1),
-      ciLower:      cLo,
-      ciUpper:      cHi,
-      ciLowerICP:   +probToICP(cLo).toFixed(1),
-      ciUpperICP:   +probToICP(cHi).toFixed(1),
+      tMin:    +tMin.toFixed(3),
+      label:   i === dispLen - 1 ? 'Now' : isTickMin ? `${Math.round(tMin)}m` : '',
+      histICP: +smooth[i].toFixed(1),
+    })
+  }
+
+  // Step 4: Forecast trajectory (0 → +30 min)
+  const lastICP    = smooth[dispLen - 1]
+  const targetICP  = probToICP(result.probability, threshold)
+  const ciLowICP   = probToICP(Math.max(0.001, result.ci_lower), threshold)
+  const ciHighICP  = probToICP(Math.min(0.999, result.ci_upper), threshold)
+  const horizonMin = result.horizon_minutes
+  const ciHalfFull = Math.max(0.5, (ciHighICP - ciLowICP) / 2)
+
+  // Long-run ICP limit beyond model horizon
+  const isAbn    = result.class === 1
+  const limitICP = isAbn
+    ? Math.min(40, targetICP + 5)
+    : Math.max(5,  targetICP - 3)
+
+  // Forecast design:
+  //   result.probability = P(abnormal) AT the model horizon (+horizonMin minutes)
+  //   targetICP          = LSTM's ICP estimate at t=+horizonMin
+  //
+  // At t=0 we anchor the forecast at the MAP-based current ICP (lastICP) because
+  // the LSTM has no separate t=0 output — the bridge must start somewhere physical.
+  // From t=0 → t=+horizonMin we interpolate toward targetICP (model's horizon estimate).
+  // Beyond horizon we use damped continuation with widening uncertainty.
+  //
+  // This correctly reflects: "ICP is currently ~X mmHg (MAP), LSTM forecasts ~Y mmHg
+  // in 15 min." A rising history + falling forecast is VALID when the LSTM (using all
+  // 6 features) disagrees with MAP alone — the model may have detected early
+  // normalisation signals not visible in MAP.
+  const lastPt       = points[points.length - 1]
+  lastPt.forecastICP = +lastICP.toFixed(1)
+  lastPt.ciLower     = +lastICP.toFixed(1)
+  lastPt.ciUpper     = +lastICP.toFixed(1)
+
+  for (let m = 1; m <= 30; m++) {
+    let icp: number
+    let ciH: number
+
+    if (m <= horizonMin) {
+      const alpha = m / horizonMin
+      icp = lastICP + alpha * (targetICP - lastICP)
+      ciH = alpha * ciHalfFull
+    } else {
+      const extra = m - horizonMin
+      icp = targetICP + (limitICP - targetICP) * (1 - Math.exp(-extra / 15))
+      ciH = Math.min(ciHalfFull + 0.6 * extra, 10)
+    }
+
+    icp = Math.max(5, Math.min(40, icp))
+
+    points.push({
+      tMin:        m,
+      label:       m === horizonMin ? `+${horizonMin}m` : m % 5 === 0 ? `+${m}m` : '',
+      forecastICP: +icp.toFixed(1),
+      ciLower:     +Math.max(5,  icp - ciH).toFixed(1),
+      ciUpper:     +Math.min(40, icp + ciH).toFixed(1),
     })
   }
 
   return points
 }
 
-function ForecastTooltip({ active, payload, isDark }: {
-  active?: boolean
-  payload?: Array<{ name: string; value: number; payload: ChartPoint }>
-  isDark?: boolean
+// ── Tooltip ───────────────────────────────────────────────────────────────────
+
+function ForecastTooltip({ active, payload, isDark, result }: {
+  active?:  boolean
+  payload?: Array<{ value: number; payload: ChartPoint }>
+  isDark?:  boolean
+  result:   ForecastResult
 }) {
   if (!active || !payload?.length) return null
-  const pt = payload[0].payload
-  const bg = isDark ? '#2D3748' : '#fff'
-  const br = isDark ? '1px solid #4A5568' : '1px solid #E2E8F0'
-  const tx = isDark ? '#E2E8F0' : '#1A202C'
-  const mu = isDark ? '#A0AEC0' : '#718096'
+  const pt  = payload[0].payload
+  const bg  = isDark ? '#1E293B' : '#fff'
+  const br  = isDark ? '1px solid #334155' : '1px solid #E2E8F0'
+  const tx  = isDark ? '#E2E8F0' : '#1A202C'
+  const mu  = isDark ? '#94A3B8' : '#6B7280'
+
+  const icpVal = pt.forecastICP ?? pt.histICP
+  const grade  = icpVal !== undefined ? icpGrade(icpVal) : null
 
   return (
-    <div style={{ background: bg, border: br, borderRadius: 6, padding: '8px 12px', fontSize: 11, color: tx }}>
-      <p style={{ fontWeight: 600, marginBottom: 4 }}>{pt.label}</p>
-      {pt.histProb !== undefined && (
-        <>
-          <p style={{ color: mu }}>Activity proxy: {(pt.histProb * 100).toFixed(1)}%</p>
-          {pt.histICP !== undefined && (
-            <p style={{ color: '#D97706', fontWeight: 600 }}>Est. ICP: ~{pt.histICP.toFixed(0)} mmHg</p>
+    <div style={{ background: bg, border: br, borderRadius: 8, padding: '8px 12px', fontSize: 11, color: tx, minWidth: 155 }}>
+      <p style={{ fontWeight: 700, marginBottom: 4 }}>
+        {pt.tMin <= 0 ? `History  ${pt.label}` : pt.label || `t +${pt.tMin.toFixed(0)}m`}
+      </p>
+
+      {icpVal !== undefined && (
+        <p style={{ color: '#D97706', fontWeight: 600, marginBottom: 2 }}>
+          Est. ICP:&nbsp;~{icpVal} mmHg
+          {grade && (
+            <span style={{ color: grade.color, marginLeft: 6, fontSize: 10 }}>
+              {grade.label}
+            </span>
           )}
-        </>
+        </p>
       )}
-      {pt.forecastProb !== undefined && pt.histProb === undefined && (
-        <>
-          <p style={{ color: pt.forecastProb >= 0.5 ? '#DC2626' : '#059669', fontWeight: 600 }}>
-            Projected: {(pt.forecastProb * 100).toFixed(1)}%
-          </p>
-          {pt.forecastICP !== undefined && (
-            <p style={{ color: '#D97706', fontWeight: 600 }}>Est. ICP: ~{pt.forecastICP.toFixed(0)} mmHg</p>
-          )}
-          {pt.ciLower !== undefined && pt.ciUpper !== undefined && pt.ciLower !== pt.ciUpper && (
-            <p style={{ color: mu }}>
-              95% CI: [{(pt.ciLower * 100).toFixed(1)}%, {(pt.ciUpper * 100).toFixed(1)}%]
-              &nbsp;(~{pt.ciLowerICP?.toFixed(0)}–{pt.ciUpperICP?.toFixed(0)} mmHg)
-            </p>
-          )}
-        </>
+
+      {pt.tMin <= 0 && (
+        <p style={{ color: mu, fontSize: 10 }}>MAP-based physical proxy (MAP − 70 mmHg)</p>
+      )}
+
+      {pt.tMin > 0 && pt.ciLower !== undefined && pt.ciUpper !== undefined && pt.ciLower !== pt.ciUpper && (
+        <p style={{ color: mu, fontSize: 10, marginTop: 2 }}>
+          95% CI: {pt.ciLower}–{pt.ciUpper} mmHg
+        </p>
+      )}
+      {pt.tMin > 0 && (
+        <p style={{ color: mu, fontSize: 10, marginTop: 1 }}>
+          LSTM target at +{result.horizon_minutes}m: ~{probToICP(result.probability, result.threshold).toFixed(0)} mmHg ({result.class_name})
+        </p>
       )}
     </div>
   )
 }
 
-export default function ForecastChart({ sequence, result }: Props) {
-  const { isDark }  = useStore()
-  const data        = buildChartData(sequence, result)
+// ── Main component ────────────────────────────────────────────────────────────
 
-  const tickColor   = isDark ? '#718096' : '#718096'
-  const gridColor   = isDark ? '#2D3748' : '#E2E8F0'
-  const normalFill  = isDark ? '#064E3B20' : '#ECFDF540'
-  const abnFill     = isDark ? '#450A0A20' : '#FEF2F240'
-  const histColor   = isDark ? '#60A5FA'   : '#2C5282'
-  const icpColor    = isDark ? '#F59E0B'   : '#D97706'
-  const foreColor   = result.class === 1
+export default function ForecastChart({ sequence, result }: Props) {
+  const { isDark } = useStore()
+  const data       = buildChartData(sequence, result)
+  const isAbn      = result.class === 1
+
+  const icpColor   = isDark ? '#F59E0B' : '#D97706'
+  const foreColor  = isAbn
     ? (isDark ? '#EF4444' : '#DC2626')
     : (isDark ? '#10B981' : '#059669')
-
-  // X-axis ticks: every 60s for history, then the forecast tick
-  const xTicks = data
-    .filter(d => d.t % 60 === 0 || d.forecastProb !== undefined)
-    .map(d => d.t)
+  const gridColor  = isDark ? '#1E293B' : '#E2E8F0'
+  const tickColor  = isDark ? '#64748B' : '#94A3B8'
+  const bgColor    = isDark ? '#0F172A' : '#fff'
+  const xTicks = [-5, -4, -3, -2, -1, 0, 5, 10, 15, 20, 25, 30]
+  const xMin   = -5   // always fixed: show last 5 min of history
 
   return (
     <div aria-label="ICP forecast chart" role="img">
-      <ResponsiveContainer width="100%" height={250}>
-        <ComposedChart data={data} margin={{ top: 8, right: 46, left: 0, bottom: 4 }}>
-          {/* Background zones */}
-          <ReferenceArea yAxisId="prob" y1={0}   y2={0.5} fill={normalFill} fillOpacity={1} />
-          <ReferenceArea yAxisId="prob" y1={0.5} y2={1.0} fill={abnFill}    fillOpacity={1} />
+      <ResponsiveContainer width="100%" height={280}>
+        <ComposedChart data={data} margin={{ top: 8, right: 28, left: 0, bottom: 4 }}>
 
-          {/* Forecast window shade */}
-          <ReferenceArea yAxisId="prob" x1={0} x2={result.horizon_minutes * 60}
-            fill={isDark ? '#2D3748' : '#F7FAFC'} fillOpacity={0.6} />
+          {/* Lundberg grade background zones */}
+          <ReferenceArea y1={0}  y2={15} fill={isDark ? '#064E3B' : '#ECFDF5'} fillOpacity={0.15} />
+          <ReferenceArea y1={15} y2={20} fill={isDark ? '#78350F' : '#FEF3C7'} fillOpacity={0.20} />
+          <ReferenceArea y1={20} y2={40} fill={isDark ? '#450A0A' : '#FEF2F2'} fillOpacity={0.22} />
+
+          {/* Forecast region shade */}
+          <ReferenceArea x1={0} x2={30} fill={isDark ? '#1E293B' : '#F8FAFC'} fillOpacity={0.50} />
 
           <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
 
           <XAxis
-            dataKey="t"
+            dataKey="tMin"
             type="number"
-            domain={[data[0].t, data[data.length - 1].t]}
+            domain={[xMin, 30]}
             ticks={xTicks}
-            tickFormatter={v => {
-              if (v === 0) return 'Now'
-              if (v > 0)   return `+${v / 60}m`
-              return `${v}s`
-            }}
+            tickFormatter={v => v === 0 ? 'Now' : v > 0 ? `+${v}m` : `${v}m`}
             tick={{ fontSize: 9, fill: tickColor }}
             tickLine={false}
             axisLine={{ stroke: gridColor }}
           />
-          <YAxis
-            yAxisId="prob"
-            domain={[0, 1]}
-            ticks={[0, 0.25, 0.5, 0.75, 1]}
-            tickFormatter={v => `${(v * 100).toFixed(0)}%`}
-            tick={{ fontSize: 9, fill: tickColor }}
-            tickLine={false}
-            axisLine={false}
-            width={36}
-          />
 
-          {/* Right axis: estimated ICP mmHg */}
           <YAxis
-            yAxisId="icp"
-            orientation="right"
             domain={[0, 40]}
             ticks={[0, 5, 10, 15, 20, 25, 30, 35, 40]}
             tickFormatter={v => `${v}`}
             tick={{ fontSize: 9, fill: icpColor }}
             tickLine={false}
             axisLine={false}
-            width={36}
-            label={{ value: 'mmHg', angle: 90, position: 'insideRight', offset: 12, fontSize: 9, fill: icpColor }}
+            width={30}
+            label={{ value: 'mmHg', angle: -90, position: 'insideLeft', offset: 10, fontSize: 9, fill: icpColor }}
           />
 
-          <ReferenceLine x={0} yAxisId="prob"
-            stroke={isDark ? '#718096' : '#6B7280'}
+          {/* Now marker */}
+          <ReferenceLine x={0}
+            stroke={isDark ? '#475569' : '#9CA3AF'}
             strokeDasharray="4 3"
-            label={{ value: 'Now', fontSize: 9, fill: tickColor, position: 'insideTopLeft' }} />
-          <ReferenceLine yAxisId="prob" y={0.5}
-            stroke={isDark ? '#EF4444' : '#DC2626'}
-            strokeDasharray="4 3" strokeOpacity={0.5} />
-          <ReferenceLine yAxisId="icp" y={15}
-            stroke={isDark ? '#F59E0B' : '#D97706'}
-            strokeDasharray="3 2" strokeOpacity={0.35}
-            label={{ value: '15mmHg', fontSize: 8, fill: icpColor, position: 'right' }} />
-
-          <Tooltip content={<ForecastTooltip isDark={isDark} />} />
-
-          {/* Historical probability trace */}
-          <Line
-            yAxisId="prob"
-            dataKey="histProb"
-            stroke={histColor}
-            strokeWidth={2}
-            dot={false}
-            isAnimationActive={false}
-            connectNulls={false}
-            name="Historical prob."
+            label={{ value: 'Now', fontSize: 8, fill: tickColor, position: 'insideTopLeft' }}
           />
 
-          {/* Historical ICP trace */}
-          <Line
-            yAxisId="icp"
-            dataKey="histICP"
-            stroke={icpColor}
-            strokeWidth={1.5}
-            strokeDasharray="4 2"
-            dot={false}
-            isAnimationActive={false}
-            connectNulls={false}
-            name="Est. ICP (mmHg)"
+          {/* Model horizon marker */}
+          <ReferenceLine x={result.horizon_minutes}
+            stroke={foreColor} strokeDasharray="3 2" strokeOpacity={0.65}
+            label={{ value: `+${result.horizon_minutes}m`, fontSize: 8, fill: foreColor, position: 'insideTopRight' }}
           />
 
-          {/* CI area — rendered only where forecastProb exists */}
+          {/* Clinical ICP thresholds */}
+          <ReferenceLine y={15}
+            stroke={icpColor} strokeDasharray="4 3" strokeOpacity={0.65}
+            label={{ value: '15', fontSize: 8, fill: icpColor, position: 'right' }}
+          />
+          <ReferenceLine y={20}
+            stroke={isDark ? '#EF4444' : '#DC2626'} strokeDasharray="3 2" strokeOpacity={0.35}
+            label={{ value: '20', fontSize: 8, fill: isDark ? '#EF4444' : '#DC2626', position: 'right' }}
+          />
+
+          <Tooltip content={<ForecastTooltip isDark={isDark} result={result} />} />
+
+          {/* 95% CI band: fill ciUpper then mask ciLower with background */}
           <Area
-            yAxisId="prob"
             dataKey="ciUpper"
             stroke="none"
             fill={foreColor}
-            fillOpacity={0.15}
+            fillOpacity={0.18}
             isAnimationActive={false}
             connectNulls={false}
             legendType="none"
           />
           <Area
-            yAxisId="prob"
             dataKey="ciLower"
             stroke="none"
-            fill={isDark ? '#1A202C' : '#fff'}
+            fill={bgColor}
             fillOpacity={1}
             isAnimationActive={false}
             connectNulls={false}
             legendType="none"
           />
 
-          {/* Forecast probability line — continuous from Now to +horizon */}
+          {/* Historical MAP-based ICP (solid amber) */}
           <Line
-            yAxisId="prob"
-            dataKey="forecastProb"
+            dataKey="histICP"
+            stroke={icpColor}
+            strokeWidth={2.5}
+            dot={false}
+            isAnimationActive={false}
+            connectNulls={false}
+            name="Historical ICP (MAP−70)"
+          />
+
+          {/* LSTM Forecast ICP (dashed, class-colored) */}
+          <Line
+            dataKey="forecastICP"
             stroke={foreColor}
-            strokeWidth={2}
-            strokeDasharray="5 3"
+            strokeWidth={2.5}
+            strokeDasharray="6 3"
             dot={(props: { cx: number; cy: number; payload: ChartPoint }) => {
-              if (props.payload.t !== result.horizon_minutes * 60) return <g key={props.payload.t} />
+              if (props.payload.tMin !== result.horizon_minutes)
+                return <g key={`dot-${props.payload.tMin}`} />
               return (
                 <circle
-                  key={props.payload.t}
-                  cx={props.cx}
-                  cy={props.cy}
-                  r={7}
+                  key={`hor-${props.payload.tMin}`}
+                  cx={props.cx} cy={props.cy} r={5}
                   fill={foreColor}
-                  stroke={isDark ? '#1A202C' : '#fff'}
+                  stroke={isDark ? '#0F172A' : '#fff'}
                   strokeWidth={2}
                 />
               )
             }}
             isAnimationActive={false}
             connectNulls={false}
-            name="Forecast prob."
+            name="LSTM Forecast ICP"
           />
 
-          {/* Forecast ICP trace */}
-          <Line
-            yAxisId="icp"
-            dataKey="forecastICP"
-            stroke={icpColor}
-            strokeWidth={1.5}
-            strokeDasharray="5 3"
-            dot={false}
-            isAnimationActive={false}
-            connectNulls={false}
-            legendType="none"
-          />
-
-          <Legend
-            wrapperStyle={{ fontSize: 11, paddingTop: 6 }}
-            iconType="line"
-          />
         </ComposedChart>
       </ResponsiveContainer>
 
-      <p className="text-2xs text-clinical-text-muted dark:text-slate-500 mt-1 text-center">
-        Solid = probability · <span style={{ color: '#D97706' }}>amber dashed = estimated ICP (mmHg)</span> ·
-        forecast dashed to +{result.horizon_minutes} min with widening 95% CI.
-        ICP estimate uses logistic transform anchored at 15 mmHg threshold.
-      </p>
+      {/* Custom legend */}
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-0.5 mt-1 text-2xs">
+        <span className="flex items-center gap-1.5">
+          <span className="w-5 h-[2px] inline-block rounded" style={{ backgroundColor: icpColor }} />
+          <span style={{ color: icpColor }}>Historical ICP (MAP−70)</span>
+        </span>
+        <span className="text-clinical-text-muted dark:text-slate-600">·</span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-5 h-[2px] inline-block rounded" style={{
+            background: `repeating-linear-gradient(90deg,${foreColor} 0,${foreColor} 6px,transparent 6px,transparent 9px)`,
+          }} />
+          <span style={{ color: foreColor }}>LSTM Forecast ICP</span>
+        </span>
+        <span className="text-clinical-text-muted dark:text-slate-600">·</span>
+        <span className="text-clinical-text-muted dark:text-slate-500">
+          Band = 95% CI &nbsp;·&nbsp;
+          <span style={{ color: foreColor }}>● = +{result.horizon_minutes}m horizon</span>
+        </span>
+      </div>
+
+      {/* Grade legend */}
+      <div className="flex items-center justify-center gap-4 mt-0.5 text-2xs text-clinical-text-muted dark:text-slate-500">
+        <span className="flex items-center gap-1">
+          <span className="w-2.5 h-2.5 rounded-sm inline-block bg-emerald-200 dark:bg-emerald-900/40" />
+          Normal (&lt;15 mmHg)
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2.5 h-2.5 rounded-sm inline-block bg-amber-200 dark:bg-amber-900/40" />
+          Grade I (15–20)
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="w-2.5 h-2.5 rounded-sm inline-block bg-red-200 dark:bg-red-900/40" />
+          Grade II (&gt;20)
+        </span>
+      </div>
     </div>
   )
 }
