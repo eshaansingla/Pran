@@ -72,8 +72,11 @@ def parse_csv_bytes(raw: bytes) -> tuple[list[list[float]], list[str]]:
         errors.append("CSV contains header but no data rows")
         return rows, errors
 
-    # Check column count from first data row
-    first = [v.strip() for v in lines[start] if v.strip() != ""]
+    # Check column count from first data row (strip trailing empty cells only —
+    # trailing commas are a common CSV artefact and must not be counted)
+    first = [v.strip() for v in lines[start]]
+    while first and first[-1] == "":
+        first.pop()
     if len(first) != N_FEATURES:
         errors.append(
             f"Invalid CSV: expected {N_FEATURES} columns, "
@@ -85,6 +88,9 @@ def parse_csv_bytes(raw: bytes) -> tuple[list[list[float]], list[str]]:
 
     for lineno, line in enumerate(lines[start:], start=start + 1):
         cells = [c.strip() for c in line]
+        # Strip trailing empty cells (CSV trailing-comma artefact)
+        while cells and cells[-1] == "":
+            cells.pop()
         # Skip blank lines
         if not any(cells):
             continue

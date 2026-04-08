@@ -27,7 +27,7 @@ _meta: dict  = {}
 _loaded      = False
 _load_error: str | None = None
 
-MC_PASSES    = 20   # Monte Carlo dropout passes for uncertainty estimate
+MC_PASSES    = 30   # Monte Carlo dropout passes for uncertainty estimate (v4.2)
 
 
 # ─── Model paths ──────────────────────────────────────────────────────────────
@@ -62,7 +62,9 @@ def _try_load() -> None:
         if attn_path.exists():
             _attn_model = load_model(str(attn_path), compile=False)
         if meta_path.exists():
-            _meta = json.loads(meta_path.read_text())
+            raw = meta_path.read_text()
+            # json.loads handles NaN-free files only — guard against corrupt meta
+            _meta = json.loads(raw)
         _loaded     = True
         print(f"[lstm_predictor] Loaded LSTM forecaster v{_meta.get('version','?')} "
               f"from {model_path}")
@@ -174,18 +176,43 @@ def predict_forecast(sequence: list[list[float]]) -> dict[str, Any]:
 
     # MC Dropout: run MC_PASSES times with training=True (keeps dropout active)
     mc_preds = np.array([
-        float(_model(x_batch, training=True).numpy()[0, 0])
+        _model(x_batch, training=True).numpy()[0]
         for _ in range(MC_PASSES)
     ])
-    prob = float(mc_preds.mean())
-    std  = float(mc_preds.std())
+    # mc_preds shape: (MC_PASSES, horizon_min) — native from model output
+
+    # Shape guard: meta and model must agree; warn and clip if legacy mismatch
+    actual_outputs = mc_preds.shape[1]
+    if actual_outputs != horizon_min:
+        print(
+            f"[lstm_predictor] WARNING: model outputs {actual_outputs} horizons "
+            f"but meta says {horizon_min}. Clipping to {min(actual_outputs, horizon_min)}. "
+            "Retrain with lstm_forecaster.py v4.1 to eliminate this warning."
+        )
+        horizon_min = min(actual_outputs, horizon_min)
+        mc_preds    = mc_preds[:, :horizon_min]
+
+    probs_30 = mc_preds.mean(axis=0)  # (horizon_min,)
+    std_30   = mc_preds.std(axis=0)   # (horizon_min,)
+
+    # Overarching classification: use the peak probability across the 30 horizons.
+    # Peak (not last) because the worst-case within the forecast window is the
+    # clinically relevant early-warning signal — a transient elevation at t=15 min
+    # followed by recovery still warrants an Abnormal alert.
+    peak_idx = int(np.argmax(probs_30))
+    prob = float(probs_30[peak_idx])
+    std  = float(std_30[peak_idx])
 
     pred_class  = int(prob >= threshold)
     class_names = ["Normal", "Abnormal"]
 
-    # Confidence interval (95% ≈ mean ± 1.96 × std, clamped to [0, 1])
-    ci_lower = float(np.clip(prob - 1.96 * std, 0.0, 1.0))
-    ci_upper = float(np.clip(prob + 1.96 * std, 0.0, 1.0))
+    # CI bounds per horizon — raw from MC dropout, no floor manipulation
+    ci_lower_30 = np.clip(probs_30 - 1.96 * std_30, 0.0, 1.0)
+    ci_upper_30 = np.clip(probs_30 + 1.96 * std_30, 0.0, 1.0)
+
+    # Scalar CI at the peak horizon (for the summary card)
+    ci_lower = float(ci_lower_30[peak_idx])
+    ci_upper = float(ci_upper_30[peak_idx])
 
     # Attention weights
     if _attn_model is not None:
@@ -236,9 +263,12 @@ def predict_forecast(sequence: list[list[float]]) -> dict[str, Any]:
         "attention_weights":  [round(float(w), 5) for w in attn_w],   # (30,)
         "attention_highlights": attention_highlights,
         "feature_highlights": feature_highlights,
-        "model_version":      _meta.get("version", "1.0"),
+        "model_version":      _meta.get("version", "2.0"),
         "seq_len":            seq_len,
         "threshold":          round(threshold, 4),
+        "forecast_probabilities": [round(float(p), 4) for p in probs_30],
+        "forecast_ci_lower":      [round(float(p), 4) for p in ci_lower_30],
+        "forecast_ci_upper":      [round(float(p), 4) for p in ci_upper_30],
     }
 
 

@@ -2,8 +2,6 @@ import { useState } from 'react'
 import { Clock, Trash2, RotateCcw, History, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import { useStore, type StoredForecast } from '../store/useStore'
 import type { ForecastResult } from '../types'
-import { probToICP } from '../utils/formatters'
-
 interface Props {
   onLoad: (result: ForecastResult, fileName: string, seqLen: number) => void
 }
@@ -21,7 +19,6 @@ function ForecastRow({ f, onLoad, onDelete }: {
   onDelete: () => void
 }) {
   const isAbn = f.class === 1
-  const estICP = probToICP(f.probability, f.result.threshold)
 
   return (
     <div className="flex items-center gap-3 px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors">
@@ -45,8 +42,7 @@ function ForecastRow({ f, onLoad, onDelete }: {
         </div>
         <p className="text-2xs text-clinical-text-muted dark:text-slate-400 truncate">
           {f.fileName} · {f.seqLen} windows ({f.durationMin} min) ·{' '}
-          <span className="tabular-nums font-mono">{(f.probability * 100).toFixed(1)}%</span>
-          {' '}· ~<span className="tabular-nums font-mono">{estICP.toFixed(0)} mmHg</span>
+          P(Abn) <span className="tabular-nums font-mono">{(f.probability * 100).toFixed(1)}%</span>
           {' '}· +{f.horizon_minutes} min ahead · {f.confidence_label} confidence
         </p>
       </div>

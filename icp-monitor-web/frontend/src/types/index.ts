@@ -114,6 +114,9 @@ export interface ForecastResult {
   seq_len: number
   threshold: number
   timestamp: string
+  forecast_probabilities?: number[]
+  forecast_ci_lower?: number[]
+  forecast_ci_upper?: number[]
 }
 
 export type ActiveTab = 'dashboard' | 'forecasting' | 'model'

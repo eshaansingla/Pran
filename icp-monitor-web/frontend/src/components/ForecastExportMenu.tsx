@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { FileDown, ChevronDown, FileText, Table } from 'lucide-react'
 import type { ForecastResult } from '../types'
-import { downloadBlob, probToICP } from '../utils/formatters'
-import { fmtFeatureName } from '../utils/formatters'
+import { downloadBlob, fmtFeatureName } from '../utils/formatters'
 
 interface Props {
   result:   ForecastResult
@@ -34,9 +33,6 @@ function exportForecastCSV(result: ForecastResult, sequence: number[][], fileNam
     `ci_lower,${result.ci_lower.toFixed(4)}`,
     `ci_upper,${result.ci_upper.toFixed(4)}`,
     `confidence_label,${result.confidence_label}`,
-    `estimated_icp_mmhg,${probToICP(result.probability, result.threshold).toFixed(1)}`,
-    `ci_icp_lower_mmhg,${probToICP(result.ci_lower, result.threshold).toFixed(1)}`,
-    `ci_icp_upper_mmhg,${probToICP(result.ci_upper, result.threshold).toFixed(1)}`,
     `horizon_minutes,${result.horizon_minutes}`,
     `threshold,${result.threshold}`,
     `timestamp,${result.timestamp}`,
@@ -65,18 +61,25 @@ function exportForecastCSV(result: ForecastResult, sequence: number[][], fileNam
   )
 }
 
-// ── MAP z-score reconstruction (mirrors ForecastChart/ForecastWindowAnalysis) ─
-const MAP_MEAN_PDF = 88.352
-const MAP_STD_PDF  = 7.850
+// ── MAP z-score reconstruction ────────────────────────────────────────────────
+const MAP_MEAN_PDF = 82.626
+const MAP_STD_PDF  = 7.825
 function toRawMAPpdf(v: number): number { return v > 50 ? v : v * MAP_STD_PDF + MAP_MEAN_PDF }
 
-// ── Lundberg grade helper ─────────────────────────────────────────────────────
-function icpGradePDF(icp: number): { label: string; color: [number,number,number] } {
-  if (icp < 7)  return { label: 'Sub-normal',  color: [37, 99, 235] }
-  if (icp < 15) return { label: 'Normal',       color: [5, 150, 105] }
-  if (icp < 20) return { label: 'Grade I ⚠',   color: [217, 119, 6] }
-  if (icp < 40) return { label: 'Grade II ✗',  color: [220, 38, 38] }
-  return           { label: 'Grade III ✗✗',    color: [124, 45, 18] }
+// ── Clinical normal bounds for each feature ──────────────────────────────────
+// Values outside these ranges are flagged as out-of-bounds and bolded in the PDF.
+const CLINICAL_BOUNDS: Record<string, { lo: number; hi: number; unit: string }> = {
+  cardiac_amplitude:       { lo: 10,   hi: 60,   unit: 'a.u.' },
+  cardiac_frequency:       { lo: 0.8,  hi: 2.0,  unit: 'Hz' },
+  respiratory_amplitude:   { lo: 3,    hi: 25,   unit: 'a.u.' },
+  slow_wave_power:         { lo: 0.97, hi: 1.0,  unit: 'frac' },
+  cardiac_power:           { lo: 0.0,  hi: 0.015,unit: 'frac' },
+  mean_arterial_pressure:  { lo: 70,   hi: 105,  unit: 'mmHg' },
+}
+function isOutOfBounds(name: string, value: number): boolean {
+  const b = CLINICAL_BOUNDS[name]
+  if (!b) return false
+  return value < b.lo || value > b.hi
 }
 
 async function exportForecastPDF(result: ForecastResult, sequence: number[][], fileName: string) {
@@ -85,18 +88,11 @@ async function exportForecastPDF(result: ForecastResult, sequence: number[][], f
   const now    = new Date().toLocaleString('en-GB', { hour12: false })
   const isAbn  = result.class === 1
   const thr    = result.threshold
-  const estICP = probToICP(result.probability, thr)
-  const ciLoICP = probToICP(result.ci_lower, thr)
-  const ciHiICP = probToICP(result.ci_upper, thr)
-  const grade  = icpGradePDF(estICP)
   const predColor: [number,number,number] = isAbn ? [220, 38, 38] : [5, 150, 105]
 
   // Compute MAP stats from sequence
   const mapVals  = sequence.map(r => toRawMAPpdf(r[5])).filter(v => v > 0)
   const mapMean  = mapVals.length ? mapVals.reduce((a, b) => a + b, 0) / mapVals.length : 0
-  const mapMin   = mapVals.length ? Math.min(...mapVals) : 0
-  const mapMax   = mapVals.length ? Math.max(...mapVals) : 0
-  const icpMean  = mapMean > 0 ? Math.max(5, Math.min(40, mapMean - 70)) : estICP
 
   let y = 18
   const L = 14
@@ -159,65 +155,37 @@ async function exportForecastPDF(result: ForecastResult, sequence: number[][], f
   text(`P(Abnormal) = ${(result.probability * 100).toFixed(1)}%`, { size: 9, color: [74, 85, 104], align: 'right' })
   y = saveY + boxH + 4
 
-  // ICP result table with reference ranges
+  // Probability summary table
   gap(1)
-  line('ICP Estimates vs. Clinical Reference Ranges:', { bold: true, size: 10 })
+  line('Classifier Probability Summary:', { bold: true, size: 10 })
   gap(1)
 
-  // Table header
+  const probRows: Array<[string, string, boolean]> = [
+    ['P(Abnormal)',    `${(result.probability * 100).toFixed(1)}%`,  isAbn],
+    ['P(Normal)',      `${(result.probabilities[0] * 100).toFixed(1)}%`,  !isAbn],
+    ['95% CI lower',  `${(result.ci_lower * 100).toFixed(1)}%`,     result.ci_lower >= thr],
+    ['95% CI upper',  `${(result.ci_upper * 100).toFixed(1)}%`,     result.ci_upper >= thr],
+  ]
+  if (mapVals.length > 0) {
+    const mapAbn = mapMean < 70 || mapMean > 105
+    probRows.push(['Mean MAP (history)', `${mapMean.toFixed(1)} mmHg`, mapAbn])
+  }
+
   doc.setFillColor(241, 245, 249)
   doc.rect(L, y - 1, W, 6, 'F')
-  text('Parameter',          { size: 9, bold: true, color: [51, 65, 85] })
-  text('Patient Value',      { size: 9, bold: true, color: [51, 65, 85], x: L + 60 })
-  text('Reference Range',    { size: 9, bold: true, color: [51, 65, 85], x: L + 100 })
-  text('Status',             { size: 9, bold: true, color: [51, 65, 85], x: L + 145 })
+  text('Parameter',  { size: 9, bold: true, color: [51, 65, 85] })
+  text('Value',      { size: 9, bold: true, color: [51, 65, 85], x: L + 80 })
+  text('vs Threshold', { size: 9, bold: true, color: [51, 65, 85], x: L + 120 })
   y += 6
-
-  // Helper to draw one reference row
-  const refRow = (
-    param: string, value: string, refRange: string, status: string,
-    abnormal: boolean
-  ) => {
+  probRows.forEach(([param, value, flagged]) => {
     doc.setDrawColor(226, 232, 240); doc.line(L, y - 1, R, y - 1)
-    const rowColor: [number,number,number] = abnormal ? [254, 242, 242] : [240, 253, 244]
+    const rowColor: [number,number,number] = flagged ? [254, 242, 242] : [240, 253, 244]
     doc.setFillColor(...rowColor)
     doc.rect(L, y - 1, W, 6, 'F')
-    text(param,    { size: 9, color: [51, 65, 85] })
-    text(value,    { size: 9, bold: abnormal, color: abnormal ? [220, 38, 38] : [5, 150, 105], x: L + 60 })
-    text(refRange, { size: 9, color: [100, 116, 139], x: L + 100 })
-    text(status,   { size: 9, bold: abnormal, color: abnormal ? [220, 38, 38] : [5, 150, 105], x: L + 145 })
+    text(param,  { size: 9, color: [51, 65, 85] })
+    text(value,  { size: 9, bold: flagged, color: flagged ? [220, 38, 38] : [5, 150, 105], x: L + 80 })
+    text(flagged ? 'Above threshold' : 'Below threshold', { size: 9, color: flagged ? [220, 38, 38] : [5, 150, 105], x: L + 120 })
     y += 6
-  }
-
-  const icpAbn  = estICP >= 15
-  const icpLoAbn = ciLoICP >= 15
-  const icpHiAbn = ciHiICP >= 20
-  const mapAbn  = mapMean > 0 && (mapMean < 70 || mapMean > 105)
-  const icpMeanAbn = icpMean >= 15
-
-  refRow('Est. ICP (LSTM model)',     `~${estICP.toFixed(0)} mmHg`,              '7–15 mmHg (supine adult)',    icpAbn  ? `${grade.label} — OUT OF RANGE`  : 'WITHIN NORMAL RANGE',    icpAbn)
-  refRow('ICP 95% CI lower',          `~${ciLoICP.toFixed(0)} mmHg`,             '7–15 mmHg',                   icpLoAbn ? 'Elevated'    : 'Normal',                     icpLoAbn)
-  refRow('ICP 95% CI upper',          `~${ciHiICP.toFixed(0)} mmHg`,             '< 20 mmHg (mild concern)',    icpHiAbn ? 'ELEVATED'    : 'Acceptable',                  icpHiAbn)
-  if (mapVals.length > 0) {
-    refRow('Mean MAP (history)',       `${mapMean.toFixed(1)} mmHg`,              '70–105 mmHg',                 mapAbn   ? 'OUT OF RANGE' : 'Normal',                    mapAbn)
-    refRow('Est. ICP (MAP−70, mean)', `~${icpMean.toFixed(0)} mmHg`,             '7–15 mmHg',                   icpMeanAbn ? 'Elevated'  : 'Normal',                     icpMeanAbn)
-  }
-  gap(1)
-
-  // Lundberg classification table
-  line('Lundberg ICP Classification:', { bold: true, size: 9 })
-  gap(1)
-  const lundRows: Array<[string, string, boolean]> = [
-    ['Normal',  '7–15 mmHg  (asymptomatic)',         !icpAbn],
-    ['Grade I', '15–20 mmHg  (mild hypertension)',    estICP >= 15 && estICP < 20],
-    ['Grade II','20–40 mmHg  (moderate, treat)',       estICP >= 20 && estICP < 40],
-    ['Grade III','>40 mmHg   (critical, Lundberg A)', estICP >= 40],
-  ]
-  lundRows.forEach(([grade, desc, current]) => {
-    const hl: [number,number,number] = current ? [88, 28, 135] : [148, 163, 184]
-    text(current ? '▶ ' + grade : '  ' + grade, { size: 8, bold: current, color: hl })
-    text(desc, { size: 8, color: hl, x: L + 28 })
-    y += 5
   })
   gap(2); rule()
 
@@ -245,7 +213,7 @@ async function exportForecastPDF(result: ForecastResult, sequence: number[][], f
     const alertStart = y
     y += 5
     line('⚠  EARLY ICP ELEVATION WARNING', { bold: true, size: 11, color: [153, 27, 27] })
-    line(`LSTM forecasts Abnormal ICP within ${result.horizon_minutes} min  |  P = ${(result.probability * 100).toFixed(0)}%  |  Est. ICP ~${estICP.toFixed(0)} mmHg (${grade.label})`,
+    line(`LSTM forecasts Abnormal ICP within ${result.horizon_minutes} min  |  P(Abnormal) = ${(result.probability * 100).toFixed(0)}%  |  threshold = ${(result.threshold * 100).toFixed(1)}%`,
       { size: 9, color: [153, 27, 27] })
     gap(1)
     line('Recommended clinical actions:', { size: 9, bold: true, color: [153, 27, 27] })
@@ -283,30 +251,36 @@ async function exportForecastPDF(result: ForecastResult, sequence: number[][], f
   })
 
   line('Feature Statistics (mean ± std over input window):', { bold: true, size: 9 })
+  line('Parameters outside normal clinical bounds are highlighted in bold red.', { size: 8, color: [100, 116, 139] })
   gap(1)
   doc.setFillColor(241, 245, 249)
   doc.rect(L, y - 1, W, 6, 'F')
-  text('Feature',    { size: 9, bold: true, color: [51, 65, 85] })
-  text('Mean',       { size: 9, bold: true, color: [51, 65, 85], x: L + 90 })
-  text('Std Dev',    { size: 9, bold: true, color: [51, 65, 85], x: L + 125 })
-  text('Min → Max',  { size: 9, bold: true, color: [51, 65, 85], x: L + 155 })
+  text('Feature',        { size: 9, bold: true, color: [51, 65, 85] })
+  text('Mean',           { size: 9, bold: true, color: [51, 65, 85], x: L + 75 })
+  text('Std Dev',        { size: 9, bold: true, color: [51, 65, 85], x: L + 105 })
+  text('Range',          { size: 9, bold: true, color: [51, 65, 85], x: L + 130 })
+  text('Status',         { size: 9, bold: true, color: [51, 65, 85], x: L + 160 })
   y += 6
 
   featureMeans.forEach(({ name, mean, std }, j) => {
     const vals = sequence.map(r => r[j]).filter(v => v !== 0)
     const mn = vals.length ? Math.min(...vals) : 0
     const mx = vals.length ? Math.max(...vals) : 0
-    const isMapFeature = j === 5
-    if (isMapFeature) {
-      doc.setFillColor(255, 251, 235)
-    } else {
-      doc.setFillColor(248, 250, 252)
-    }
+    const oob = isOutOfBounds(name, mean)
+    const bounds = CLINICAL_BOUNDS[name]
+    const rowColor: [number,number,number] = oob ? [254, 242, 242] : [248, 250, 252]
+    const txtColor: [number,number,number] = oob ? [220, 38, 38] : [51, 65, 85]
+    doc.setFillColor(...rowColor)
     doc.rect(L, y - 1, W, 6, 'F')
-    text(fmtFeatureName(name), { size: 9, color: isMapFeature ? [180, 83, 9] : [51, 65, 85], bold: isMapFeature })
-    text(mean.toFixed(2),      { size: 9, color: [51, 65, 85], x: L + 90 })
-    text(`±${std.toFixed(2)}`, { size: 9, color: [100, 116, 139], x: L + 125 })
-    text(`${mn.toFixed(1)} → ${mx.toFixed(1)}`, { size: 9, color: [100, 116, 139], x: L + 155 })
+    text(fmtFeatureName(name), { size: 9, color: txtColor, bold: oob })
+    text(mean.toFixed(2),      { size: 9, color: txtColor, bold: oob, x: L + 75 })
+    text(`±${std.toFixed(2)}`, { size: 9, color: [100, 116, 139], x: L + 105 })
+    text(`${mn.toFixed(1)}–${mx.toFixed(1)}`, { size: 9, color: [100, 116, 139], x: L + 130 })
+    if (oob && bounds) {
+      text(`OUT OF RANGE (${bounds.lo}–${bounds.hi} ${bounds.unit})`, { size: 8, bold: true, color: [220, 38, 38], x: L + 155 })
+    } else if (bounds) {
+      text(`Normal (${bounds.lo}–${bounds.hi})`, { size: 8, color: [5, 150, 105], x: L + 155 })
+    }
     y += 6
   })
   gap(3); rule()
@@ -365,17 +339,16 @@ async function exportForecastPDF(result: ForecastResult, sequence: number[][], f
   line('5. MODEL INFORMATION', { bold: true, size: 12 })
   gap(2)
   const modelRows: Array<[string, string]> = [
-    ['Model Type',          'Bidirectional LSTM + Self-Attention'],
-    ['Version',             result.model_version],
-    ['Architecture',        'BiLSTM(64→32) + Dense(32) + Sigmoid'],
-    ['Forecast Horizon',    `${result.horizon_minutes} min ahead`],
-    ['Uncertainty Method',  'Monte Carlo Dropout (20 stochastic passes)'],
-    ['Decision Threshold',  `${thr.toFixed(4)} (F1-optimised on validation set)`],
-    ['ICP Formula',         'probToICP(p, thr) = 15 + 3×(logit(p)−logit(thr)) mmHg'],
-    ['MAP→ICP Formula',     'ICP = MAP − CPP; CPP assumed = 70 mmHg (Rosner 1990)'],
-    ['Training Data',       'CHARIS + MIMIC-III (PhysioNet), patient-stratified'],
-    ['Model Performance',   'AUC = 0.984  |  F1 = 0.966  |  Sensitivity = 96.4%'],
-    ['Train / Val / Test',  '279,660 / 9,546 / 156,690 sequences'],
+    ['Model Type',          'Bidirectional LSTM + Self-Attention + t=0 Anchor'],
+    ['Version',             `v${result.model_version}`],
+    ['Architecture',        'BiLSTM(64) → Attention → Dense(16) Anchor → Dense(48) → Sigmoid(15)'],
+    ['Forecast Horizon',    `${result.horizon_minutes} min ahead (15 distinct 1-min intervals)`],
+    ['Uncertainty Method',  'Monte Carlo Dropout (30 stochastic passes)'],
+    ['Decision Threshold',  `${thr.toFixed(4)} (recall-constrained, F1-optimised on validation set)`],
+    ['Loss Function',       'Focal Loss (γ=2.0, α=0.70) + Temporal Consistency Penalty (w=0.15)'],
+    ['Output',              'P(Abnormal ICP) per forecast horizon — raw classifier probability'],
+    ['Training Data',       'CHARIS + MIMIC-III (PhysioNet), patient-stratified GroupShuffleSplit'],
+    ['Validation',          'No data leakage — patient-level train/val/test isolation'],
   ]
   modelRows.forEach(([k, v]) => twoCol(k + ':', v, { size: 9, bold: true, color: [74, 85, 104] }, { size: 9, color: [26, 32, 44] }))
   gap(3); rule()
@@ -388,8 +361,8 @@ async function exportForecastPDF(result: ForecastResult, sequence: number[][], f
   const disc = [
     '• This system is a RESEARCH PROTOTYPE and a clinical decision SUPPORT tool only.',
     '• NOT FDA-cleared. NOT CE-marked. NOT for autonomous diagnostic or treatment decisions.',
-    '• Estimated ICP values are probabilistic approximations derived from the LSTM model output',
-    '  via logit-space calibration and the MAP−CPP formula — not direct ICP measurements.',
+    '• P(Abnormal) outputs are raw classifier probabilities — NOT direct ICP measurements.',
+    '  No ICP value in mmHg is implied or derived from these probabilities.',
     '• All clinical decisions must be made and verified by qualified medical professionals.',
     '• Validate rigorously in a prospective clinical trial before any patient-care deployment.',
     '• Literature: Czosnyka & Pickard (Brain 2004), Rosner & Daughton (Neurosurg 1990).',

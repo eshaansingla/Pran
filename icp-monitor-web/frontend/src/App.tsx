@@ -174,7 +174,7 @@ export default function App() {
             <strong className="text-clinical-text-secondary dark:text-slate-300">Disclaimer:</strong>{' '}
             Research prototype. Not FDA-approved. Not for autonomous diagnostic use.
             All decisions must be made by qualified clinicians.
-            {' '}XGBoost v2.2 — F1 0.877 · AUC 0.949 &nbsp;|&nbsp; LSTM v1.0 — F1 0.966 · AUC 0.984 &nbsp;|&nbsp; Trained 2026-04-05/06
+            {' '}XGBoost v2.2 — F1 0.877 · AUC 0.949 &nbsp;|&nbsp; LSTM v4.2 — F1 0.807 · AUC 0.905 &nbsp;|&nbsp; Trained 2026-04-05/08
           </span>
         </div>
       </footer>

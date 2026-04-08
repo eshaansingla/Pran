@@ -1,21 +1,48 @@
-# Claude Code internal
+# ── AI Assistant internal ────────────────────────────────────────────────────
 .claude/
 CLAUDE.md
+.gemini/
 
-# ── Data — never commit raw or processed patient data ──────────────────────
+# ── Data — never commit raw or processed patient data ───────────────────────
 data/raw/
 data/processed/
 data/*.csv
 
-# ── Test / sample CSVs in root (generated, not source) ───────────────────────
-test_data_*.csv
-sample_hardware_data.csv
-
-# ── Trained models (large binaries) ────────────────────────────────────────
+# ── Trained models (large binaries — use Git LFS or download separately) ────
 models/
+*.h5
+*.pkl
+*.pkl.gz
+*.ubj
 
-# ── Results (regenerable from scripts) ─────────────────────────────────────
+# ── Results (regenerable from training scripts) ─────────────────────────────
 results/
+
+# ── Literature / PDFs (copyright, not source code) ──────────────────────────
+literature/
+
+# ── Logs ────────────────────────────────────────────────────────────────────
+logs/
+*.log
+
+# ── Dev automation scripts (not part of core codebase) ──────────────────────
+auto_improve_lstm.py
+queue_lstm.py
+queue_lstm.ps1
+run_lstm_pipeline.py
+simulate_esp32_hardware.py
+
+# ── Temporary / scratch files ───────────────────────────────────────────────
+tmp/
+feature_analysis.*
+test_output.*
+test_results.*
+notes.html
+
+# ── Test CSVs (generated, not source) ───────────────────────────────────────
+test_data_*.csv
+test_*.csv
+icp-monitor-web/frontend/public/test_*.csv
 
 # ── Web app — build artifacts and dependencies ──────────────────────────────
 icp-monitor-web/frontend/node_modules/
@@ -36,13 +63,9 @@ env/
 .pytest_cache/
 .coverage
 htmlcov/
-*.log
 
 # ── Firmware generated header (regenerable) ─────────────────────────────────
 firmware/esp32_icp_monitor/xgboost_model.h
-
-# ── Logs ────────────────────────────────────────────────────────────────────
-logs/
 
 # ── IDE ─────────────────────────────────────────────────────────────────────
 .vscode/
@@ -58,7 +81,3 @@ Thumbs.db
 # ── Secrets — NEVER commit credentials ──────────────────────────────────────
 .env
 *.env
-notes.html
-
-#── previous research ──────────────────────────────────────────────────────────────
-literature/

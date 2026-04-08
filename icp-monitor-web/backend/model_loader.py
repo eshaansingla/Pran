@@ -41,8 +41,13 @@ FEATURE_RANGES = {
     "cardiac_amplitude":      (10.0, 80.0),
     "cardiac_frequency":      (0.8, 2.5),
     "respiratory_amplitude":  (2.0, 30.0),
-    "slow_wave_power":        (0.05, 5.0),
-    "cardiac_power":          (0.1, 5.0),
+    # slow_wave_power = wavelet energy fraction in 0–1.56 Hz band (db4, level-5 approximation).
+    # Hard upper bound is 1.0 (fraction). Training mean ≈ 0.999, std ≈ 0.012.
+    "slow_wave_power":        (0.50, 1.0),
+    # cardiac_power = wavelet energy fraction in 1.56–3.12 Hz band (db4, level-5 detail).
+    # Hard upper bound is 1.0 (fraction). Training mean ≈ 0.004, std ≈ 0.006.
+    # Permissive upper bound covers 8σ above training mean.
+    "cardiac_power":          (0.0, 0.05),
     "mean_arterial_pressure": (50.0, 150.0),
 }
 CLASS_NAMES = ["Normal", "Abnormal"]
@@ -59,11 +64,11 @@ def _default_model_path() -> Path:
     env = os.environ.get("MODEL_PATH")
     if env:
         return Path(env)
-    return Path(__file__).parent.parent / "models" / "xgboost_binary.pkl.gz"
+    return Path(__file__).parent.parent.parent / "models" / "xgboost_binary.pkl.gz"
 
 
 def load_model(path: Path | None = None) -> xgb.Booster:
-    global _model, _calibrator, _threshold, _calibrated, _global_importances, _ece_after
+    global _model, _calibrator, _threshold, _calibrated, _global_importances, _meta
     if _model is not None:
         return _model
 
@@ -84,16 +89,19 @@ def load_model(path: Path | None = None) -> xgb.Booster:
     raw = _model.get_score(importance_type="gain")
     fi_map = {f"f{i}": name for i, name in enumerate(FEATURE_NAMES)}
     total = sum(raw.values()) or 1.0
-    _global_importances = {
-        fi_map.get(k, k): v / total for k, v in raw.items()
-    }
+    # Initialise all features to 0 — get_score() omits zero-gain features
+    _global_importances = {name: 0.0 for name in FEATURE_NAMES}
+    _global_importances.update({fi_map.get(k, k): v / total for k, v in raw.items()})
 
-    # Load calibrator (optional — graceful fallback if not present)
+    # Load calibrator (optional — graceful fallback if not present or sklearn missing)
     cal_path = model_path.parent / "xgboost_binary_calibrator.pkl.gz"
     if cal_path.exists():
-        with gzip.open(cal_path, "rb") as fh:
-            _calibrator = pickle.load(fh)
-        _calibrated = True
+        try:
+            with gzip.open(cal_path, "rb") as fh:
+                _calibrator = pickle.load(fh)
+            _calibrated = True
+        except Exception as exc:
+            print(f"[model_loader] Calibrator load failed ({exc}); using raw probabilities")
 
     # Load all metadata from binary_meta.json (optional — graceful fallback)
     meta_path = model_path.parent / "binary_meta.json"
@@ -108,7 +116,10 @@ def _calibrate(prob: float) -> float:
     """Apply isotonic calibration if a calibrator is loaded."""
     if _calibrator is None:
         return prob
-    return float(_calibrator.predict(np.array([prob]))[0])
+    try:
+        return float(_calibrator.predict(np.array([prob]))[0])
+    except Exception:
+        return prob   # fallback to raw probability if calibration fails
 
 
 def _make_dmatrix(features: list[float]) -> xgb.DMatrix:

@@ -460,6 +460,9 @@ def main(target_patients: int, scan_step: int, out_dir: Path, best: bool = False
     all_labels:      list[int]        = []
     all_patient_ids: list[int]        = []
 
+    MAX_NORMAL_PATIENTS = 5
+    normal_patients_kept = 0
+
     for i, rec_dir in enumerate(icp_records):
         pid = _subject_id_from_rec_dir(rec_dir)   # real MIMIC subject_id
         print(f"  [{i+1:02d}/{len(icp_records)}] {rec_dir} (subject_id={pid}) ...", end=" ", flush=True)
@@ -472,6 +475,15 @@ def main(target_patients: int, scan_step: int, out_dir: Path, best: bool = False
 
         counts = {0: labels.count(0), 1: labels.count(1), 2: labels.count(2)}
         print(f"{len(feats)} windows  N={counts[0]} E={counts[1]} C={counts[2]}")
+
+        # Selective Balancing Logic for LSTM:
+        # Drop patients completely lacking abnormal windows once we have enough negative references
+        total_abnormal = counts[1] + counts[2]
+        if total_abnormal < 5:
+            if normal_patients_kept >= MAX_NORMAL_PATIENTS:
+                print("  -> SKIPPING strictly Normal patient to balance dataset...")
+                continue
+            normal_patients_kept += 1
 
         all_features.extend(feats)
         all_labels.extend(labels)

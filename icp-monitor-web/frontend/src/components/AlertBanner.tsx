@@ -68,7 +68,7 @@ export default function AlertBanner({ summary, loading }: Props) {
         </div>
         <p className="text-xs text-red-700 dark:text-red-300 mt-0.5">
           <strong>{summary.abnormal.toLocaleString()}</strong> of {summary.total.toLocaleString()} windows abnormal
-          ({pct}%) — ICP likely &ge;15 mmHg · Clinical review recommended
+          ({pct}%) above threshold · Clinical review recommended
         </p>
       </div>
       <button

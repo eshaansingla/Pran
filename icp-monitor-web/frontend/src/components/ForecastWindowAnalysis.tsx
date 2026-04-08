@@ -2,11 +2,12 @@ import { useState } from 'react'
 import { Activity, AlertTriangle, CheckCircle2 } from 'lucide-react'
 import type { ForecastResult } from '../types'
 import { useStore } from '../store/useStore'
-import { mapToICP, icpGrade } from '../utils/formatters'
 
-// Scaler constants from lstm_meta.json — used to reconstruct raw MAP from z-scores
-const MAP_MEAN = 88.352
-const MAP_STD  = 7.850
+// Scaler constants from lstm_meta.json — used only to reconstruct raw MAP for display.
+const MAP_MEAN = 82.626
+const MAP_STD  = 7.825
+
+const XGBOOST_THRESHOLD = 0.545
 
 /** Auto-detect z-score vs raw MAP. Physiological MAP ≥ 50 mmHg always. */
 function toRawMAP(val: number): number {
@@ -24,11 +25,12 @@ const FEATURE_DEFS = [
 ]
 
 interface Props {
-  sequence: number[][]   // raw N × 6 windows (all-zero when reloaded from history)
-  result: ForecastResult
+  sequence:   number[][]   // raw N × 6 windows (all-zero when reloaded from history)
+  result:     ForecastResult
+  histProbs?: number[]     // per-window XGBoost P(abnormal), same length as sequence
 }
 
-export default function ForecastWindowAnalysis({ sequence, result }: Props) {
+export default function ForecastWindowAnalysis({ sequence, result, histProbs }: Props) {
   const { isDark }    = useStore()
   const [open, setOpen]         = useState(true)   // start open — visible by default
   const [selected, setSelected] = useState<number | null>(null)
@@ -36,17 +38,16 @@ export default function ForecastWindowAnalysis({ sequence, result }: Props) {
   const seqLen      = sequence.length
   const hasRealData = sequence.some(row => row.some(v => v !== 0))
 
-  // Per-window derived values
-  // Classification uses clinical ICP threshold (15 mmHg), NOT LSTM probability threshold.
-  // MAP-based ICP is a physiological proxy independent of the LSTM classifier.
+  // Per-window derived values — raw XGBoost P(abnormal) [0-1], no ICP conversion.
   const windows = Array.from({ length: seqLen }, (_, i) => {
     const row    = sequence[i]
-    const rawMap = toRawMAP(row[5])      // auto-reconstruct if z-scored
-    const icp    = mapToICP(rawMap)      // MAP − 70, clamped [5, 40]
-    const isAbn  = icp >= 15            // clinical ICP threshold
+    const rawMap = toRawMAP(row[5])      // for feature display only
+    const prob   = histProbs?.[i] ?? 0.1
+    const probPct = +(Math.max(0, Math.min(100, prob * 100)).toFixed(1))
+    const isAbn  = prob >= XGBOOST_THRESHOLD
     const attnW  = result.attention_weights[i] ?? 0
     const tMin   = -(seqLen - 1 - i) * 10 / 60
-    return { idx: i, tMin, icp, isAbn, attnW, features: row, rawMap }
+    return { idx: i, tMin, probPct, isAbn, attnW, features: row, rawMap }
   })
 
   const attnMax = Math.max(...windows.map(w => w.attnW), 0.001)
@@ -102,7 +103,7 @@ export default function ForecastWindowAnalysis({ sequence, result }: Props) {
                 Session Timeline — {seqLen} windows · {(seqLen * 10 / 60).toFixed(1)} min
               </p>
               <p className="text-2xs text-clinical-text-muted dark:text-slate-500">
-                Colour: MAP-based ICP ≥15 mmHg = abnormal
+                Colour: XGBoost P(Abn) &ge;{(XGBOOST_THRESHOLD * 100).toFixed(0)}% = abnormal
               </p>
             </div>
             <div className="flex h-8 rounded-lg overflow-hidden border border-clinical-border dark:border-slate-600 gap-px">
@@ -127,7 +128,7 @@ export default function ForecastWindowAnalysis({ sequence, result }: Props) {
                     <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 hidden group-hover:block z-20 pointer-events-none">
                       <div className="bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-900 text-2xs px-2 py-1 rounded shadow-lg whitespace-nowrap">
                         #{w.idx + 1} · t={w.tMin.toFixed(1)}m
-                        {hasRealData && ` · ICP~${w.icp.toFixed(0)} mmHg · Attn ${(w.attnW * 100).toFixed(1)}%`}
+                        {hasRealData && ` · P(Abn) ${w.probPct.toFixed(1)}% · Attn ${(w.attnW * 100).toFixed(1)}%`}
                       </div>
                     </div>
                   </div>
@@ -166,7 +167,7 @@ export default function ForecastWindowAnalysis({ sequence, result }: Props) {
                 <option key={w.idx} value={w.idx}>
                   #{w.idx + 1} · t = {w.tMin.toFixed(1)} min
                   {hasRealData
-                    ? ` · ICP ~${w.icp.toFixed(0)} mmHg · ${w.isAbn ? 'Abnormal' : 'Normal'} · Attn ${(w.attnW * 100).toFixed(1)}%`
+                    ? ` · P(Abn) ${w.probPct.toFixed(1)}% · ${w.isAbn ? 'Abnormal' : 'Normal'} · Attn ${(w.attnW * 100).toFixed(1)}%`
                     : ''}
                 </option>
               ))}
@@ -211,15 +212,15 @@ export default function ForecastWindowAnalysis({ sequence, result }: Props) {
                   </p>
                 </div>
 
-                {/* ICP estimate */}
+                {/* XGBoost probability */}
                 {hasRealData && (
                   <div className="rounded-xl border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-3 py-2.5">
-                    <p className="text-2xs text-clinical-text-muted dark:text-slate-400 mb-0.5">Est. ICP (MAP − 70)</p>
+                    <p className="text-2xs text-clinical-text-muted dark:text-slate-400 mb-0.5">XGBoost P(Abnormal)</p>
                     <p className="text-xl font-bold tabular-nums text-amber-700 dark:text-amber-400">
-                      ~{sel.icp.toFixed(0)} mmHg
+                      {sel.probPct.toFixed(1)}%
                     </p>
-                    <p className="text-xs font-semibold" style={{ color: icpGrade(sel.icp).color }}>
-                      {icpGrade(sel.icp).label}
+                    <p className="text-xs font-semibold" style={{ color: sel.isAbn ? '#DC2626' : '#059669' }}>
+                      {sel.isAbn ? 'Above threshold' : 'Below threshold'}
                     </p>
                   </div>
                 )}
@@ -301,7 +302,7 @@ export default function ForecastWindowAnalysis({ sequence, result }: Props) {
                     <tr>
                       <th className="px-3 py-1.5 text-left font-semibold text-clinical-text-muted dark:text-slate-400">#</th>
                       <th className="px-3 py-1.5 text-left font-semibold text-clinical-text-muted dark:text-slate-400">Time</th>
-                      <th className="px-3 py-1.5 text-right font-semibold text-amber-600 dark:text-amber-400">ICP est.</th>
+                      <th className="px-3 py-1.5 text-right font-semibold text-amber-600 dark:text-amber-400">P(Abn)</th>
                       <th className="px-3 py-1.5 text-right font-semibold text-purple-600 dark:text-purple-400">Attention</th>
                       <th className="px-3 py-1.5 text-left font-semibold text-clinical-text-muted dark:text-slate-400">Status</th>
                     </tr>
@@ -327,7 +328,7 @@ export default function ForecastWindowAnalysis({ sequence, result }: Props) {
                             #{w.idx + 1} · {w.tMin.toFixed(1)}m
                           </td>
                           <td className="px-3 py-1.5 text-right tabular-nums font-mono text-amber-600 dark:text-amber-400">
-                            ~{w.icp.toFixed(0)} mmHg
+                            {w.probPct.toFixed(1)}%
                           </td>
                           <td className="px-3 py-1.5 text-right tabular-nums font-mono text-purple-600 dark:text-purple-400">
                             {(w.attnW * 100).toFixed(1)}%

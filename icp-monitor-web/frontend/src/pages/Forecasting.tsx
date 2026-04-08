@@ -5,8 +5,7 @@ import {
 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import type { ForecastResult } from '../types'
-import { predictForecast, fetchModelInfo } from '../utils/api'
-import { probToICP, icpGrade } from '../utils/formatters'
+import { predictForecast, fetchModelInfo, predictBatch } from '../utils/api'
 import { fmtFeatureName } from '../utils/formatters'
 import { useStore } from '../store/useStore'
 import ForecastChart          from '../components/ForecastChart'
@@ -51,12 +50,6 @@ function ForecastCard({ result }: { result: ForecastResult }) {
   const ciLoPct = (result.ci_lower  * 100).toFixed(1)
   const ciHiPct = (result.ci_upper  * 100).toFixed(1)
 
-  const thr    = result.threshold
-  const estICP = probToICP(result.probability, thr)
-  const icpLo  = probToICP(result.ci_lower,    thr)
-  const icpHi  = probToICP(result.ci_upper,    thr)
-  const grade  = icpGrade(estICP)
-
   const cardBg     = isAbn
     ? 'bg-red-50 dark:bg-red-900/20 border-red-200 dark:border-red-700'
     : 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-700'
@@ -97,29 +90,27 @@ function ForecastCard({ result }: { result: ForecastResult }) {
         </p>
       </div>
 
-      {/* Estimated ICP — prominent */}
+      {/* Peak P(Abnormal) — prominent */}
       <div className="rounded-lg border border-amber-200 dark:border-amber-700
         bg-amber-50 dark:bg-amber-900/20 px-3 py-2.5 mb-3">
         <p className="text-xs text-clinical-text-muted dark:text-slate-400 mb-0.5">
-          Estimated ICP (mmHg)
+          Peak P(Abnormal)
         </p>
         <div className="flex items-baseline gap-2">
           <p className="text-2xl font-bold tabular-nums text-amber-700 dark:text-amber-400">
-            ~{estICP.toFixed(0)}
-            <span className="text-sm font-normal ml-1">mmHg</span>
+            {pct}
+            <span className="text-sm font-normal ml-0.5">%</span>
           </p>
-          <span
-            className="text-xs font-semibold px-1.5 py-0.5 rounded"
-            style={{
-              backgroundColor: grade.color + '20',
-              color: grade.color,
-            }}
-          >
-            {grade.label}
+          <span className={`text-xs font-semibold px-1.5 py-0.5 rounded ${
+            isAbn
+              ? 'bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-400'
+              : 'bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-400'
+          }`}>
+            {isAbn ? 'Above threshold' : 'Below threshold'}
           </span>
         </div>
         <p className="text-2xs text-clinical-text-muted dark:text-slate-500 mt-0.5">
-          95% CI: ~{icpLo.toFixed(0)}–{icpHi.toFixed(0)} mmHg · threshold = 15 mmHg
+          95% CI: {ciLoPct}%–{ciHiPct}% · threshold = {(result.threshold * 100).toFixed(1)}%
         </p>
       </div>
 
@@ -134,7 +125,6 @@ function ForecastCard({ result }: { result: ForecastResult }) {
 
 function EarlyWarningBanner({ result }: { result: ForecastResult }) {
   if (result.class !== 1 || result.probability < result.threshold) return null
-  const estICP = probToICP(result.probability, result.threshold)
   return (
     <div role="alert" className="rounded-xl border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/30 p-4">
       <div className="flex items-center gap-2 mb-2">
@@ -145,9 +135,9 @@ function EarlyWarningBanner({ result }: { result: ForecastResult }) {
       </div>
       <p className="text-sm text-red-700 dark:text-red-300 mb-3">
         LSTM model forecasts <strong>Abnormal ICP</strong> within approximately{' '}
-        <strong>{result.horizon_minutes} minutes</strong> with{' '}
-        <strong>{(result.probability * 100).toFixed(0)}%</strong> probability
-        — estimated ~<strong>{estICP.toFixed(0)} mmHg</strong> (threshold: 15 mmHg).
+        <strong>{result.horizon_minutes} minutes</strong> with peak P(Abnormal){' '}
+        <strong>{(result.probability * 100).toFixed(0)}%</strong>{' '}
+        (threshold: {(result.threshold * 100).toFixed(1)}%).
       </p>
       <ul className="text-xs text-red-700 dark:text-red-400 space-y-1 list-disc list-inside">
         <li>Verify patient positioning (head elevated 30°)</li>
@@ -162,7 +152,6 @@ function EarlyWarningBanner({ result }: { result: ForecastResult }) {
     </div>
   )
 }
-
 
 function FeatureHighlights({ result }: { result: ForecastResult }) {
   return (
@@ -217,7 +206,7 @@ function SessionMeta({ result, sequence, fileName }: {
           { label: 'Model',     value: `LSTM v${result.model_version}` },
           { label: 'Horizon',   value: `${result.horizon_minutes} min ahead` },
           { label: 'Threshold', value: `${result.threshold.toFixed(3)} (F1-opt.)` },
-          { label: 'MC Passes', value: '20 (dropout)' },
+          { label: 'MC Passes', value: '30 (dropout)' },
         ].map(({ label, value }) => (
           <div key={label} className="flex justify-between text-xs">
             <span className="text-clinical-text-muted dark:text-slate-500">{label}</span>
@@ -243,6 +232,7 @@ export default function Forecasting() {
   const [sequence,    setSequence]   = useState<number[][] | null>(null)
   const [fileName,    setFileName]   = useState<string>('')
   const [result,      setResult]     = useState<ForecastResult | null>(null)
+  const [histProbs,   setHistProbs]  = useState<number[] | undefined>(undefined)
   const [errorMsg,    setErrorMsg]   = useState<string>('')
   const [showHeatmap, setShowHeatmap] = useState(false)
   const [globalImportances, setGlobalImportances] = useState<Record<string, number>>({})
@@ -270,6 +260,10 @@ export default function Forecasting() {
     setState('loading')
 
     try {
+      const batchRes = await predictBatch(file)
+      const probs = batchRes.predictions.map(p => p.probability)
+      setHistProbs(probs)
+
       const res = await predictForecast(rows)
       setResult(res)
       setState('done')
@@ -296,7 +290,7 @@ export default function Forecasting() {
   }
 
   function reset() {
-    setSequence(null); setResult(null); setFileName(''); setErrorMsg(''); setState('idle')
+    setSequence(null); setResult(null); setFileName(''); setErrorMsg(''); setState('idle'); setHistProbs(undefined)
   }
 
   function reloadForecast(res: ForecastResult, fname: string, seqLen: number) {
@@ -304,6 +298,11 @@ export default function Forecasting() {
     setFileName(fname)
     setSequence(Array.from({ length: seqLen }, () => Array(6).fill(0) as number[]))
     setState('done')
+    // Synthesize histProbs from the forecast's first probability so the
+    // historical line is consistent with the forecast instead of showing
+    // a misleading flat 10% fallback.
+    const anchor = res.forecast_probabilities?.[0] ?? res.probability
+    setHistProbs(Array.from({ length: seqLen }, () => anchor))
     toast.success('Forecast reloaded from history')
   }
 
@@ -316,7 +315,7 @@ export default function Forecasting() {
             ICP Trend Forecasting
           </h1>
           <p className="text-sm text-clinical-text-muted dark:text-slate-400 mt-0.5">
-            LSTM — {15}-minute ahead prediction · BiLSTM(64→32) + self-attention · MC Dropout (20 passes)
+            LSTM — 15-minute multipoint prediction · BiLSTM(64→15) + self-attention · MC Dropout (30 passes)
           </p>
         </div>
 
@@ -357,9 +356,9 @@ export default function Forecasting() {
           </div>
           <pre className="text-xs font-mono text-clinical-text-muted dark:text-slate-400 bg-slate-50 dark:bg-slate-900 rounded p-3 overflow-x-auto">
 {`cardiac_amplitude,cardiac_frequency,respiratory_amplitude,slow_wave_power,cardiac_power,mean_arterial_pressure
-32.4,1.2,8.7,1.30,2.10,95.0
-28.1,1.1,7.2,1.65,2.55,92.0
-45.6,1.3,12.3,1.80,3.20,98.0
+32.4,1.20,8.7,0.997,0.003,95.0
+28.1,1.10,7.2,0.996,0.004,92.0
+45.6,1.30,12.3,0.994,0.006,98.0
 ...  (minimum 30 rows)`}
           </pre>
           <p className="text-2xs text-clinical-text-muted dark:text-slate-500 mt-2">
@@ -367,6 +366,47 @@ export default function Forecasting() {
             Export 30+ rows from a classification session to use here.
           </p>
         </div>
+
+        {/* Quick-start example data button */}
+        <button
+          onClick={async () => {
+            try {
+              setState('loading')
+              setErrorMsg('')
+              const exRes   = await fetch('/api/example_csv')
+              const exData  = await exRes.json() as { csv: string }
+              const csvBlob = new Blob([exData.csv], { type: 'text/csv' })
+              const csvFile = new File([csvBlob], 'example_data.csv', { type: 'text/csv' })
+              const text    = exData.csv
+              const { rows, error } = parseSequenceCsv(text)
+              if (error || !rows) { setErrorMsg(error ?? 'Parse error'); setState('error'); return }
+              setSequence(rows)
+              setFileName('example_data.csv')
+              const batchRes = await predictBatch(csvFile)
+              setHistProbs(batchRes.predictions.map(p => p.probability))
+              const res = await predictForecast(rows)
+              setResult(res)
+              setState('done')
+              addForecast(res, 'example_data.csv', rows.length)
+              toast.success(`Forecast complete — ${res.class_name}`)
+            } catch (e: unknown) {
+              setErrorMsg(e instanceof Error ? e.message : String(e))
+              setState('error')
+              toast.error('Example forecast failed')
+            }
+          }}
+          className="w-full rounded-xl border border-purple-200 dark:border-purple-700
+            bg-purple-50 dark:bg-purple-900/20 p-4 text-center cursor-pointer
+            hover:bg-purple-100 dark:hover:bg-purple-900/40 transition-colors"
+        >
+          <TrendingUp size={20} className="mx-auto mb-2 text-purple-600 dark:text-purple-400" />
+          <p className="text-sm font-medium text-purple-700 dark:text-purple-300">
+            Use Example Data (35 windows)
+          </p>
+          <p className="text-xs text-purple-500 dark:text-purple-400 mt-0.5">
+            Runs both XGBoost classification + LSTM forecast on sample clinical data
+          </p>
+        </button>
 
         <ForecastHistory onLoad={reloadForecast} />
       </div>
@@ -382,7 +422,7 @@ export default function Forecasting() {
           Running LSTM forecast…
         </p>
         <p className="text-xs text-clinical-text-muted dark:text-slate-400">
-          Monte Carlo dropout · 20 stochastic passes · computing uncertainty bounds
+          Monte Carlo dropout · 30 stochastic passes · computing uncertainty bounds
         </p>
       </div>
     )
@@ -433,18 +473,18 @@ export default function Forecasting() {
 
           <div className="col-span-3 bg-white dark:bg-slate-800 border border-clinical-border dark:border-slate-600 rounded-xl p-4 shadow-sm">
             <h3 className="text-xs font-semibold text-clinical-text-secondary dark:text-slate-300 uppercase tracking-wide mb-0.5">
-              Estimated ICP (mmHg) — Last 5 min History + 30-min Forecast
+              P(Abnormal) — Last 5 min History + {result.horizon_minutes}-min Forecast
             </h3>
             <p className="text-2xs text-clinical-text-muted dark:text-slate-500 mb-3">
-              Amber = MAP-based historical ICP · Dashed = LSTM forecast
+              Amber = XGBoost historical P(Abn) · Dashed = LSTM forecast
               {sequence.length > 30 && ` · Model used full ${(sequence.length * 10 / 60).toFixed(1)}-min input (${sequence.length} windows)`}
             </p>
-            <ForecastChart sequence={sequence} result={result} />
+            <ForecastChart sequence={sequence} result={result} histProbs={histProbs} />
           </div>
         </div>
 
         {/* Window-by-window analysis (LSTM equivalent of XGBoost window inspector) */}
-        <ForecastWindowAnalysis sequence={sequence} result={result} />
+        <ForecastWindowAnalysis sequence={sequence} result={result} histProbs={histProbs} />
 
         {/* Attention heatmap */}
         <div className="bg-white dark:bg-slate-800 border border-clinical-border dark:border-slate-600 rounded-xl shadow-sm overflow-hidden">
@@ -475,8 +515,7 @@ export default function Forecasting() {
         <div className="rounded-xl border border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20 px-4 py-3">
           <p className="text-xs text-amber-700 dark:text-amber-400">
             <strong>Research prototype.</strong> LSTM trained on CHARIS + MIMIC-III research data.
-            Estimated ICP values use CPP formula (MAP − 70 mmHg, Rosner 1990) and are probabilistic
-            approximations — not direct measurements. Requires clinical validation. Not FDA-approved.
+            P(Abnormal) outputs are raw classifier probabilities — not direct ICP measurements. Requires clinical validation. Not FDA-approved.
             All decisions must be made by qualified clinicians.
           </p>
         </div>

@@ -40,54 +40,71 @@ async function exportPDF(result: BatchResult) {
   let y = 18
   const L = 14
   const W = 182
+  const R = L + W
 
-  const line = (text: string, opts?: { bold?: boolean; size?: number; color?: [number,number,number] }) => {
+  // ── helpers ──
+  type TextOpts = { bold?: boolean; size?: number; color?: [number,number,number]; align?: 'left'|'right'; x?: number }
+  const text = (t: string, opts?: TextOpts) => {
     doc.setFont('helvetica', opts?.bold ? 'bold' : 'normal')
     doc.setFontSize(opts?.size ?? 10)
-    if (opts?.color) doc.setTextColor(...opts.color)
-    else doc.setTextColor(26, 32, 44)
-    doc.text(text, L, y)
+    doc.setTextColor(...(opts?.color ?? [26, 32, 44]))
+    const xPos = opts?.x ?? (opts?.align === 'right' ? R : L)
+    doc.text(t, xPos, y, opts?.align === 'right' ? { align: 'right' } : {})
+  }
+  const line = (t: string, opts?: TextOpts) => {
+    text(t, opts)
     y += (opts?.size ?? 10) * 0.45 + 2
   }
-
-  const rule = () => {
-    doc.setDrawColor(226, 232, 240)
-    doc.line(L, y, L + W, y)
-    y += 4
+  const rule = (color: [number,number,number] = [226, 232, 240]) => {
+    doc.setDrawColor(...color); doc.line(L, y, R, y); y += 4
+  }
+  const gap = (n = 4) => { y += n }
+  const twoCol = (left: string, right: string, opts?: TextOpts, rightOpts?: TextOpts) => {
+    text(left, opts)
+    text(right, { ...(rightOpts ?? opts), align: 'right' })
+    y += ((opts?.size ?? 10) * 0.45 + 2)
   }
 
-  const gap = (n = 4) => { y += n }
-
-  // Header bar
+  // ── Header bar ──
   doc.setFillColor(44, 82, 130)
-  doc.rect(0, 0, 210, 14, 'F')
-  doc.setFont('helvetica', 'bold')
-  doc.setFontSize(11)
-  doc.setTextColor(255, 255, 255)
-  doc.text('ICP MONITORING REPORT — CLINICAL DECISION SUPPORT', 14, 9)
-  doc.setFontSize(7)
-  doc.setFont('helvetica', 'normal')
-  doc.text(`NOT FOR DIAGNOSTIC USE | Research Prototype v${mi?.version ?? '2.2'}`, 14, 12.5)
-  y = 22
+  doc.rect(0, 0, 210, 18, 'F')
+  doc.setFont('helvetica', 'bold'); doc.setFontSize(13); doc.setTextColor(255, 255, 255)
+  doc.text('NON-INVASIVE ICP CLASSIFICATION REPORT', 14, 9)
+  doc.setFont('helvetica', 'normal'); doc.setFontSize(8)
+  doc.text('XGBoost Clinical Decision Support  |  Research Prototype  |  NOT FOR DIAGNOSTIC USE', 14, 14)
+  doc.text(`v${mi?.version ?? '2.2'}`, 196, 9, { align: 'right' })
+  y = 24
 
-  line('GENERATED: ' + now, { bold: true, size: 9 })
-  line('SESSION ID: ' + sid, { size: 9, color: [74, 85, 104] })
-  gap(3)
-  rule()
+  // Report metadata
+  twoCol('Report Date:', now, { size: 9, bold: true, color: [74, 85, 104] }, { size: 9, color: [74, 85, 104] })
+  twoCol('Session ID:', sid, { size: 9, bold: true, color: [74, 85, 104] }, { size: 9, color: [74, 85, 104] })
+  gap(1); rule()
 
-  // Summary
-  line('SUMMARY STATISTICS', { bold: true, size: 11 })
+  // ── Section 1: Classification Summary ──
+  line('1. CLASSIFICATION SUMMARY', { bold: true, size: 12 })
   gap(2)
-  line(`Total Windows Analysed : ${summary.total.toLocaleString()}`, { size: 10 })
-  line(`Normal ICP             : ${summary.normal.toLocaleString()} windows (${summary.normal_pct}%)`, { size: 10, color: [5, 150, 105] })
-  line(`Abnormal ICP           : ${summary.abnormal.toLocaleString()} windows (${summary.abnormal_pct}%)`, { size: 10, color: [220, 38, 38] })
-  gap(3)
-  rule()
 
-  // Abnormal events
+  const pctAbn = summary.abnormal_pct
+  const isHighRisk = pctAbn >= 30
+  const summaryColor: [number,number,number] = isHighRisk ? [254, 226, 226] : [209, 250, 229]
+  const summaryBorder: [number,number,number] = isHighRisk ? [220, 38, 38] : [5, 150, 105]
+  doc.setFillColor(...summaryColor); doc.setDrawColor(...summaryBorder)
+  const boxStart = y; y += 5
+  line(`Overall Assessment:  ${isHighRisk ? 'ELEVATED RISK — Abnormal ICP episodes detected' : 'LOW RISK — ICP predominantly within normal range'}`,
+    { bold: true, size: 11, color: isHighRisk ? [220, 38, 38] : [5, 150, 105] })
+  twoCol('Windows Analysed:', summary.total.toLocaleString(), { size: 10 }, { size: 10 })
+  twoCol('Normal ICP:', `${summary.normal.toLocaleString()} (${summary.normal_pct}%)`, { size: 10, color: [5, 150, 105] }, { size: 10, color: [5, 150, 105] })
+  twoCol('Abnormal ICP:', `${summary.abnormal.toLocaleString()} (${summary.abnormal_pct}%)`,
+    { size: 10, color: isHighRisk ? [220, 38, 38] : [26, 32, 44], bold: isHighRisk },
+    { size: 10, color: isHighRisk ? [220, 38, 38] : [26, 32, 44], bold: isHighRisk })
+  y += 2
+  doc.roundedRect(L, boxStart, W, y - boxStart, 2, 2, 'FD')
+  gap(3); rule()
+
+  // ── Section 2: Abnormal Events ──
   const abnormals = result.predictions.filter(p => p.class === 1)
   if (abnormals.length > 0) {
-    line('ABNORMAL EVENTS', { bold: true, size: 11, color: [220, 38, 38] })
+    line('2. ABNORMAL ICP EPISODES', { bold: true, size: 12, color: [220, 38, 38] })
     gap(2)
     const episodes: Array<{ start: number; end: number }> = []
     let start: number | null = null
@@ -97,69 +114,108 @@ async function exportPDF(result: BatchResult) {
     })
     if (start !== null) episodes.push({ start, end: result.predictions.length })
 
-    episodes.slice(0, 10).forEach((ep, i) => {
-      const dur     = ep.end - ep.start + 1
+    // Table header
+    doc.setFillColor(254, 242, 242)
+    doc.rect(L, y - 1, W, 6, 'F')
+    text('Episode', { size: 9, bold: true, color: [153, 27, 27] })
+    text('Duration', { size: 9, bold: true, color: [153, 27, 27], x: L + 50 })
+    text('Avg Confidence', { size: 9, bold: true, color: [153, 27, 27], x: L + 95 })
+    text('Severity', { size: 9, bold: true, color: [153, 27, 27], align: 'right' })
+    y += 6
+
+    episodes.slice(0, 12).forEach((ep, i) => {
+      const dur = ep.end - ep.start + 1
       const avgConf = result.predictions.slice(ep.start - 1, ep.end)
         .reduce((s, p) => s + p.confidence, 0) / dur
-      line(
-        `${i + 1}. Windows ${ep.start}–${ep.end}  (${dur} window${dur > 1 ? 's' : ''}, avg confidence ${(avgConf * 100).toFixed(0)}%)`,
-        { size: 9, color: [153, 27, 27] }
-      )
+      const durMin = (dur * 10 / 60).toFixed(1)
+      const severity = avgConf > 0.85 ? 'CRITICAL' : avgConf > 0.7 ? 'HIGH' : 'MODERATE'
+      const sevColor: [number,number,number] = avgConf > 0.85 ? [153, 27, 27] : avgConf > 0.7 ? [220, 38, 38] : [180, 83, 9]
+      doc.setFillColor(i % 2 === 0 ? 255 : 254, 250, 250)
+      doc.rect(L, y - 1, W, 6, 'F')
+      text(`Windows ${ep.start}–${ep.end}`, { size: 9, color: [51, 65, 85] })
+      text(`${dur} windows (${durMin} min)`, { size: 9, color: [51, 65, 85], x: L + 50 })
+      text(`${(avgConf * 100).toFixed(0)}%`, { size: 9, bold: true, color: sevColor, x: L + 95 })
+      text(severity, { size: 9, bold: true, color: sevColor, align: 'right' })
+      y += 6
     })
-    if (episodes.length > 10) line(`   … and ${episodes.length - 10} more episodes`, { size: 9 })
-    gap(3)
-    rule()
+    if (episodes.length > 12) line(`   … and ${episodes.length - 12} more episodes`, { size: 9, color: [100, 116, 139] })
+    gap(3); rule()
   }
 
-  // Prediction log
-  line('PREDICTION LOG (first 30 windows)', { bold: true, size: 11 })
+  // ── Section 3: Prediction Log ──
+  if (y > 220) { doc.addPage(); y = 18 }
+  line(`${abnormals.length > 0 ? '3' : '2'}. WINDOW-BY-WINDOW CLASSIFICATION (first 30)`, { bold: true, size: 12 })
   gap(2)
-  const colX = [L, 55, 105, 150]
-  const headers = ['Window', 'Class', 'Normal%', 'Abnormal%']
-  const colColors: Array<[number,number,number]> = [[26,32,44],[26,32,44],[5,150,105],[220,38,38]]
-  doc.setFont('helvetica', 'bold'); doc.setFontSize(8)
-  headers.forEach((h, i) => { doc.setTextColor(...colColors[i]); doc.text(h, colX[i], y) })
-  y += 5
+  const colX = [L, L + 30, L + 65, L + 105, L + 140]
+  const headers = ['Window', 'Class', 'P(Normal)', 'P(Abnormal)', 'Status']
+  doc.setFillColor(241, 245, 249)
+  doc.rect(L, y - 1, W, 6, 'F')
+  headers.forEach((h, i) => {
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(8)
+    doc.setTextColor(51, 65, 85)
+    doc.text(h, colX[i], y)
+  })
+  y += 6
   doc.setFont('helvetica', 'normal')
   result.predictions.slice(0, 30).forEach(p => {
-    doc.setTextColor(26,32,44); doc.text(String(p.window_id), colX[0], y)
-    const clsColor: [number,number,number][] = [[5,150,105],[220,38,38]]
-    doc.setTextColor(...clsColor[p.class]); doc.text(p.class_name, colX[1], y)
-    doc.setTextColor(26,32,44)
-    doc.text((p.probabilities[0]*100).toFixed(1)+'%', colX[2], y)
-    doc.text((p.probabilities[1]*100).toFixed(1)+'%', colX[3], y)
+    const isAbn = p.class === 1
+    const rowBg: [number,number,number] = isAbn ? [254, 242, 242] : [248, 250, 252]
+    doc.setFillColor(...rowBg)
+    doc.rect(L, y - 4, W, 5, 'F')
+    doc.setTextColor(26, 32, 44); doc.text(String(p.window_id), colX[0], y)
+    doc.setTextColor(...(isAbn ? [220, 38, 38] as [number,number,number] : [5, 150, 105] as [number,number,number]))
+    doc.setFont('helvetica', isAbn ? 'bold' : 'normal')
+    doc.text(p.class_name, colX[1], y)
+    doc.setFont('helvetica', 'normal')
+    doc.setTextColor(26, 32, 44)
+    doc.text((p.probabilities[0] * 100).toFixed(1) + '%', colX[2], y)
+    doc.setTextColor(...(isAbn ? [220, 38, 38] as [number,number,number] : [26, 32, 44] as [number,number,number]))
+    doc.setFont('helvetica', isAbn ? 'bold' : 'normal')
+    doc.text((p.probabilities[1] * 100).toFixed(1) + '%', colX[3], y)
+    doc.setFont('helvetica', 'normal')
+    doc.setTextColor(...(isAbn ? [220, 38, 38] as [number,number,number] : [5, 150, 105] as [number,number,number]))
+    doc.text(isAbn ? 'ABNORMAL' : 'Normal', colX[4], y)
     y += 5
     if (y > 270) { doc.addPage(); y = 18 }
   })
-  gap(3)
-  rule()
+  gap(3); rule()
 
-  // Model info
-  line('MODEL INFORMATION', { bold: true, size: 11 })
+  // ── Section 4: Model Information ──
+  if (y > 230) { doc.addPage(); y = 18 }
+  const secNum = abnormals.length > 0 ? '4' : '3'
+  line(`${secNum}. MODEL INFORMATION`, { bold: true, size: 12 })
   gap(2)
-  line(`Model Type          : ${mi?.model_type ?? 'XGBoost Binary Classifier'}`, { size: 10 })
-  line(`Version             : ${mi?.version ?? '2.2'}`, { size: 10 })
-  line(`Training Date       : ${mi?.training_date ?? 'N/A'}`, { size: 10 })
-  line(`Training Data       : CHARIS (${mi?.training_data.charis_patients ?? 13} patients) + MIMIC-III (${mi?.training_data.mimic_patients ?? 87} patients)`, { size: 10 })
-  line(`F1-Score            : ${(mi?.metrics.f1 ?? 0.8770).toFixed(4)}`, { size: 10 })
-  line(`AUC                 : ${(mi?.metrics.auc ?? 0.9490).toFixed(4)}`, { size: 10 })
-  line(`Balanced Accuracy   : ${(mi?.metrics.balanced_accuracy ?? 0.8848).toFixed(4)}`, { size: 10 })
-  if (mi?.calibrated) line('Calibration         : Isotonic (probabilities calibrated)', { size: 10 })
-  gap(3)
-  rule()
-
-  // Disclaimer
-  line('IMPORTANT DISCLAIMER', { bold: true, size: 11, color: [220, 38, 38] })
-  gap(2)
-  const disc = [
-    'This system is a clinical decision SUPPORT tool only.',
-    'It is NOT FDA-approved and NOT intended for autonomous diagnostic use.',
-    'All clinical decisions must be made by qualified medical professionals.',
-    'Model trained on research datasets — validate before clinical deployment.',
+  const mRows: Array<[string, string]> = [
+    ['Model Type',        mi?.model_type ?? 'XGBoost Binary Classifier'],
+    ['Version',           `v${mi?.version ?? '2.2'}`],
+    ['Training Data',     `CHARIS (${mi?.training_data.charis_patients ?? 13}) + MIMIC-III (${mi?.training_data.mimic_patients ?? 87}) patients`],
+    ['Calibration',       mi?.calibrated ? 'Isotonic Regression (cross-validated)' : 'Uncalibrated'],
+    ['ICP Threshold',     '15 mmHg (Czosnyka & Pickard, Brain 2004)'],
+    ['F1-Score (test)',   (mi?.metrics.f1 ?? 0.877).toFixed(4)],
+    ['AUC (test)',        (mi?.metrics.auc ?? 0.949).toFixed(4)],
+    ['Sensitivity (test)',(mi?.metrics.recall ?? 0.819).toFixed(4)],
+    ['Specificity (test)',(mi?.metrics.specificity ?? 0.951).toFixed(4)],
+    ['Data Integrity',    'No data leakage — patient-level GroupShuffleSplit'],
   ]
-  disc.forEach(d => line(d, { size: 9, color: [153, 27, 27] }))
+  mRows.forEach(([k, v]) => twoCol(k + ':', v, { size: 9, bold: true, color: [74, 85, 104] }, { size: 9, color: [26, 32, 44] }))
+  gap(3); rule()
 
-  doc.save(`ICP_Report_${sid}.pdf`)
+  // ── Disclaimer ──
+  doc.setFillColor(254, 243, 199); doc.setDrawColor(217, 119, 6)
+  const discStart = y; y += 4
+  line('IMPORTANT DISCLAIMER', { bold: true, size: 10, color: [120, 53, 15] })
+  const disc = [
+    '• This system is a RESEARCH PROTOTYPE and a clinical decision SUPPORT tool only.',
+    '• NOT FDA-cleared. NOT CE-marked. NOT for autonomous diagnostic or treatment decisions.',
+    '• All clinical decisions must be made and verified by qualified medical professionals.',
+    '• Model trained on CHARIS + MIMIC-III research datasets — requires prospective validation.',
+    '• Literature: Czosnyka & Pickard (Brain 2004), Rosner & Daughton (Neurosurg 1990).',
+  ]
+  disc.forEach(d => line(d, { size: 8, color: [120, 53, 15] }))
+  y += 2
+  doc.roundedRect(L, discStart, W, y - discStart, 2, 2, 'FD')
+
+  doc.save(`ICP_Classification_Report_${sid}.pdf`)
 }
 
 export default function ExportMenu({ result, disabled }: Props) {
