@@ -21,30 +21,29 @@
 <tr>
 <td width="50%">
 
-### ⚡ XGBoost Classifier (v2.2)
-| Metric | Score |
-|:---|:---:|
-| F1-Score | **0.877** |
-| AUC-ROC | **0.949** |
-| Precision | **0.944** |
-| Recall | **0.819** |
-| Balanced Accuracy | **0.885** |
-| ECE (calibrated) | **0.097** |
-| Inference Latency | **< 5 ms** |
+### ⚡ XGBoost Classifier (v3.0)
+| Metric | Score | 95% CI |
+|:---|:---:|:---:|
+| F1-Score | **0.882** | [0.880, 0.885] |
+| AUC-ROC | **0.956** | [0.954, 0.957] |
+| Precision | **0.935** | [0.932, 0.937] |
+| Recall | **0.835** | [0.831, 0.839] |
+| Balanced Accuracy | **0.892** | — |
+| ECE (calibrated) | **0.098** | — |
+| 5-fold CV F1 | **0.828 ± 0.114** | — |
 
 </td>
 <td width="50%">
 
 ### 🔮 BiLSTM Forecaster (v4.2)
-| Metric | Score |
-|:---|:---:|
-| F1-Score | **0.807** |
-| AUC-ROC | **0.905** |
-| Precision | **0.832** |
-| Recall | **0.784** |
-| Balanced Accuracy | **0.815** |
-| Forecast Horizon | **15 min** |
-| MC Dropout Passes | **30** |
+| Metric | Score | Method |
+|:---|:---:|:---:|
+| AUC (per-sequence) | **0.890** | Peak prob → 1 decision |
+| F1 (per-sequence) | **0.795** | Peak prob → 1 decision |
+| AUC at t+1 min | **0.924** | Per-horizon |
+| AUC at t+15 min | **0.874** | Per-horizon |
+| Forecast Horizon | **15 min** | 1-min resolution |
+| MC Dropout Passes | **30** | Uncertainty CI |
 
 </td>
 </tr>
@@ -53,8 +52,8 @@
 | Dataset | Patients | Windows | Features |
 |:---|:---:|:---:|:---:|
 | CHARIS (TBI ICU) | 13 | ~400,000 | 6 |
-| MIMIC-III (General ICU) | 87 | ~48,537 | 6 |
-| **Combined** | **100** | **448,537** | **6** |
+| MIMIC-III (General ICU) | 95 | ~101,551 | 6 |
+| **Combined** | **108** | **501,302** | **6** |
 
 ---
 
@@ -264,8 +263,8 @@ Pran/
 | Dataset | Source | Patients | Windows | ICP Distribution |
 |:---|:---|:---:|:---:|:---|
 | CHARIS | PhysioNet (TBI ICU) | 13 | ~400,000 | 38% Normal / 62% Abnormal |
-| MIMIC-III | PhysioNet (General ICU) | 87 | ~48,537 | 87% Normal / 13% Abnormal |
-| **Combined** | — | **100** | **448,537** | **~39% Normal / 61% Abnormal** |
+| MIMIC-III | PhysioNet (General ICU) | 95 | ~101,551 | 87% Normal / 13% Abnormal |
+| **Combined** | — | **108** | **501,302** | **~63% Normal / 37% Abnormal** |
 
 ### Why Two Datasets?
 
@@ -508,20 +507,22 @@ flowchart LR
   Loss: focal_temporal(γ=2.0, α=0.7, λ=0.15)
 ══════════════════════════════════════════════════════
 
-  Test-set metrics:
-    AUC-ROC         : 0.9054   ✓ PASS  (target ≥ 0.89)
-    F1-Score        : 0.8071   ✓ PASS  (target ≥ 0.80)
-    Precision       : 0.8316
-    Recall (Sens.)  : 0.7840
-    Specificity     : 0.8461
-    Balanced Acc.   : 0.8150
-    Early Warning   : 78.4%   (correctly predicted 15 min ahead)
+  Per-Sequence metrics (honest — 1 decision per sequence):
+    AUC-ROC         : 0.890
+    F1-Score        : 0.795
+    Precision       : 0.924
+    Recall (Sens.)  : 0.698
+    Balanced Acc.   : 0.801
+
+  Per-Horizon AUC (shows expected degradation):
+    t+ 1 min : 0.924   t+ 5 min : 0.904
+    t+10 min : 0.887   t+15 min : 0.874
 
   Training data:
     Total sequences : 491,924
     Train           : 348,465  (46 patients)
     Validation      :  77,227  ( 8 patients)
-    Test            :  66,232  (15 patients)
+    Test            :  66,237  (15 patients)
 ══════════════════════════════════════════════════════
 ```
 
@@ -814,7 +815,24 @@ All methods used in this system are grounded in peer-reviewed clinical ML litera
 
 ---
 
-## 16. Disclaimer
+## 16. Limitations & Honest Assessment
+
+> **Transparency Note**: These limitations are documented proactively in the spirit of responsible ML research and are essential for EMBC reviewers.
+
+| Limitation | Impact | Mitigation |
+|:---|:---|:---|
+| **Small patient count (N=108)** | High CV variance (F1 std=0.113), weak population generalization claims | Report 5-fold CV with mean±std; bootstrap 95% CIs |
+| **CHARIS MAP constant (90 mmHg)** | MAP feature provides zero discriminative signal for CHARIS patients | Document; MAP still contributes via MIMIC ABP data |
+| **Temporal autocorrelation** | Adjacent windows are not independent; 501k windows ≠ 501k independent samples | Report effective N per patient; document limitation |
+| **No prospective validation** | All results are retrospective on archived PhysioNet data | IRB-approved prospective study needed for clinical deployment |
+| **Hardware normalization gap** | Firmware uses linear approximations, not the wavelet/FFT pipeline | Research prototype uses WiFi raw-signal approach |
+| **Domain shift (CHARIS→MIMIC)** | OOD F1 drops from 0.786 to 0.610 | Combined training; report gap honestly |
+
+> See [`RESULTS.md`](RESULTS.md) for complete metrics, baseline comparisons, and confidence intervals.
+
+---
+
+## 17. Disclaimer
 
 > **⚠️ This is a research prototype** developed as a capstone project for academic submission (IEEE EMBC track).
 >
@@ -834,6 +852,6 @@ All methods used in this system are grounded in peer-reviewed clinical ML litera
 
 *Built by Eshaan Singla — Non-Invasive ICP Monitoring & Forecasting Capstone — 2026*
 
-**XGBoost v2.2** · F1 0.877 · AUC 0.949 &nbsp;|&nbsp; **BiLSTM v4.2** · F1 0.807 · AUC 0.905
+**XGBoost v3.0** · CV F1 0.828±0.114 · AUC 0.944 &nbsp;|&nbsp; **BiLSTM v4.2** · F1 0.795 · AUC 0.890 (per-seq)
 
 </div>

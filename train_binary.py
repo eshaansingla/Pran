@@ -226,16 +226,32 @@ def calibrate(bst, X_va: np.ndarray, y_va: np.ndarray, pid_va: np.ndarray, n_fol
     final_cal = IsotonicRegression(out_of_bounds="clip")
     final_cal.fit(oof_probs, y_va)
 
-    # Optimal threshold on OOF calibrated probs
+    # Optimal threshold: maximize F1 subject to recall ≥ 0.75
+    # Rationale: in clinical ICP monitoring, missing an abnormal case
+    # (low recall) is more dangerous than a false alarm (low precision).
     thresholds = np.linspace(0.05, 0.95, 181)
     best_f1, best_t = 0.0, 0.5
+    best_f1_any, best_t_any = 0.0, 0.5  # fallback: best F1 without recall constraint
     for t in thresholds:
-        f = f1_score(y_va, (oof_probs >= t).astype(int), zero_division=0)
-        if f > best_f1:
+        preds = (oof_probs >= t).astype(int)
+        f = f1_score(y_va, preds, zero_division=0)
+        r = recall_score(y_va, preds, zero_division=0)
+        if f > best_f1_any:
+            best_f1_any, best_t_any = f, float(t)
+        if r >= 0.75 and f > best_f1:
             best_f1, best_t = f, float(t)
+
+    # Fallback: if no threshold achieves recall >= 0.75, use Youden's J
+    if best_f1 == 0.0:
+        from sklearn.metrics import roc_curve as _rc
+        fpr_v, tpr_v, thr_v = _rc(y_va, oof_probs)
+        j_idx = np.argmax(tpr_v - fpr_v)
+        best_t = float(thr_v[j_idx])
+        print(f"  No threshold achieved recall ≥ 0.75; using Youden's J = {best_t:.4f}")
 
     print(f"  CV calibration: {n_folds} patient-level folds")
     return final_cal, round(best_t, 4), round(ece_before, 4), round(ece_after, 4)
+
 
 
 # ---------------------------------------------------------------------------
@@ -353,6 +369,215 @@ def evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir: Path,
         "tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp),
     }
 
+# ---------------------------------------------------------------------------
+# 5-fold Grouped Cross-Validation
+# ---------------------------------------------------------------------------
+
+def grouped_cv(X, y, pid, n_splits=5):
+    """Run 5-fold patient-level cross-validation and report mean ± std."""
+    from sklearn.model_selection import GroupKFold
+
+    print(f"\n{'='*60}")
+    print(f"  {n_splits}-FOLD GROUPED CROSS-VALIDATION")
+    print(f"{'='*60}")
+
+    gkf = GroupKFold(n_splits=n_splits)
+    fold_metrics = []
+
+    for fold, (tr_idx, te_idx) in enumerate(gkf.split(X, y, groups=pid)):
+        X_fold_tr, y_fold_tr = X[tr_idx], y[tr_idx]
+        X_fold_te, y_fold_te = X[te_idx], y[te_idx]
+
+        n0, n1 = (y_fold_tr == 0).sum(), (y_fold_tr == 1).sum()
+        spw = round(n0 / max(n1, 1), 4)
+
+        dtrain = xgb.DMatrix(X_fold_tr, label=y_fold_tr)
+        dtest  = xgb.DMatrix(X_fold_te)
+
+        params = {
+            "objective": "binary:logistic", "eval_metric": "auc",
+            "eta": 0.1, "max_depth": 4, "min_child_weight": 5,
+            "subsample": 0.8, "colsample_bytree": 0.8,
+            "scale_pos_weight": spw, "lambda": 1.0, "alpha": 0.1,
+            "seed": SEED, "tree_method": "hist", "verbosity": 0,
+        }
+
+        bst = xgb.train(params, dtrain, num_boost_round=500,
+                         evals=[(dtrain, "train")],
+                         early_stopping_rounds=30, verbose_eval=0)
+
+        probs = bst.predict(dtest)
+        preds = (probs >= 0.5).astype(int)
+        f1 = f1_score(y_fold_te, preds, zero_division=0)
+        auc_val = roc_auc_score(y_fold_te, probs)
+        prec = precision_score(y_fold_te, preds, zero_division=0)
+        rec = recall_score(y_fold_te, preds, zero_division=0)
+        bacc = balanced_accuracy_score(y_fold_te, preds)
+
+        fold_metrics.append({
+            "fold": fold + 1, "f1": f1, "auc": auc_val,
+            "precision": prec, "recall": rec, "balanced_acc": bacc,
+            "n_train": len(y_fold_tr), "n_test": len(y_fold_te),
+            "n_train_patients": len(np.unique(pid[tr_idx])),
+            "n_test_patients": len(np.unique(pid[te_idx])),
+        })
+        print(f"  Fold {fold+1}: F1={f1:.4f}  AUC={auc_val:.4f}  Prec={prec:.4f}  "
+              f"Rec={rec:.4f}  BalAcc={bacc:.4f}  "
+              f"({len(np.unique(pid[te_idx]))} test patients)")
+
+    # Summary
+    f1s  = [m["f1"]  for m in fold_metrics]
+    aucs = [m["auc"] for m in fold_metrics]
+    precs = [m["precision"] for m in fold_metrics]
+    recs = [m["recall"] for m in fold_metrics]
+    baccs = [m["balanced_acc"] for m in fold_metrics]
+
+    print(f"\n  {'Metric':<16} {'Mean':>7} {'± Std':>8}")
+    print(f"  {'-'*33}")
+    print(f"  {'F1-score':<16} {np.mean(f1s):>7.4f} ± {np.std(f1s):.4f}")
+    print(f"  {'AUC':<16} {np.mean(aucs):>7.4f} ± {np.std(aucs):.4f}")
+    print(f"  {'Precision':<16} {np.mean(precs):>7.4f} ± {np.std(precs):.4f}")
+    print(f"  {'Recall':<16} {np.mean(recs):>7.4f} ± {np.std(recs):.4f}")
+    print(f"  {'Balanced Acc':<16} {np.mean(baccs):>7.4f} ± {np.std(baccs):.4f}")
+
+    return fold_metrics
+
+
+# ---------------------------------------------------------------------------
+# Bootstrapped Confidence Intervals
+# ---------------------------------------------------------------------------
+
+def bootstrap_ci(y_true, y_pred, y_prob, pid, n_boot=1000, alpha=0.05):
+    """
+    Patient-level bootstrapped 95% CIs for F1, AUC, Precision, Recall.
+
+    Resamples PATIENTS (with replacement), then pools all their windows.
+    This is the correct procedure for clustered medical data — window-level
+    resampling underestimates variance by 3–5× because consecutive windows
+    from the same patient are highly correlated.
+
+    Parameters
+    ----------
+    y_true, y_pred, y_prob : per-window arrays
+    pid                    : per-window patient ID array (same length)
+    n_boot                 : number of bootstrap iterations
+    alpha                  : significance level (0.05 → 95% CI)
+    """
+    rng = np.random.RandomState(SEED)
+    unique_pids = np.unique(pid)
+    boot_f1, boot_auc, boot_prec, boot_rec = [], [], [], []
+
+    for _ in range(n_boot):
+        # Resample patients with replacement, pool all their windows
+        sampled_pids = rng.choice(unique_pids, size=len(unique_pids), replace=True)
+        idx = np.concatenate([np.where(pid == p)[0] for p in sampled_pids])
+
+        if len(np.unique(y_true[idx])) < 2:
+            continue  # skip degenerate bootstrap samples (no class variation)
+
+        boot_f1.append(f1_score(y_true[idx], y_pred[idx], zero_division=0))
+        boot_auc.append(roc_auc_score(y_true[idx], y_prob[idx]))
+        boot_prec.append(precision_score(y_true[idx], y_pred[idx], zero_division=0))
+        boot_rec.append(recall_score(y_true[idx], y_pred[idx], zero_division=0))
+
+    lo, hi = alpha / 2 * 100, (1 - alpha / 2) * 100
+    return {
+        "f1":   (np.percentile(boot_f1, lo),  np.percentile(boot_f1, hi)),
+        "auc":  (np.percentile(boot_auc, lo), np.percentile(boot_auc, hi)),
+        "prec": (np.percentile(boot_prec, lo), np.percentile(boot_prec, hi)),
+        "rec":  (np.percentile(boot_rec, lo),  np.percentile(boot_rec, hi)),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Learning Curves
+# ---------------------------------------------------------------------------
+
+def plot_learning_curves(X_tr, y_tr, X_va, y_va, X_te, y_te, out_dir: Path):
+    """Plot F1 vs training data fraction and AUC vs boosting rounds."""
+    print("\n  Generating learning curves ...")
+
+    # --- F1 vs % training data ---
+    fracs = [0.1, 0.2, 0.3, 0.5, 0.7, 1.0]
+    train_f1s = []; test_f1s = []
+
+    for frac in fracs:
+        n = int(len(X_tr) * frac)
+        rng = np.random.RandomState(SEED)
+        idx = rng.choice(len(X_tr), n, replace=False)
+        Xf, yf = X_tr[idx], y_tr[idx]
+        n0, n1 = (yf == 0).sum(), (yf == 1).sum()
+        spw = round(n0 / max(n1, 1), 4)
+
+        dtrain = xgb.DMatrix(Xf, label=yf)
+        dval   = xgb.DMatrix(X_va, label=y_va)
+        dte    = xgb.DMatrix(X_te)
+
+        params = {
+            "objective": "binary:logistic", "eval_metric": "auc",
+            "eta": 0.1, "max_depth": 4, "min_child_weight": 5,
+            "subsample": 0.8, "colsample_bytree": 0.8,
+            "scale_pos_weight": spw, "lambda": 1.0, "alpha": 0.1,
+            "seed": SEED, "tree_method": "hist", "verbosity": 0,
+        }
+
+        bst = xgb.train(params, dtrain, num_boost_round=300,
+                         evals=[(dval, "val")],
+                         early_stopping_rounds=20, verbose_eval=0)
+
+        tr_pred = (bst.predict(dtrain) >= 0.5).astype(int)
+        te_pred = (bst.predict(dte) >= 0.5).astype(int)
+        train_f1s.append(f1_score(yf, tr_pred, zero_division=0))
+        test_f1s.append(f1_score(y_te, te_pred, zero_division=0))
+
+    # --- AUC vs boosting rounds (from evals_result) ---
+    n0, n1 = (y_tr == 0).sum(), (y_tr == 1).sum()
+    spw = round(n0 / max(n1, 1), 4)
+    dtrain_full = xgb.DMatrix(X_tr, label=y_tr)
+    dval_full   = xgb.DMatrix(X_va, label=y_va)
+
+    evals_result = {}
+    params = {
+        "objective": "binary:logistic", "eval_metric": "auc",
+        "eta": 0.1, "max_depth": 4, "min_child_weight": 5,
+        "subsample": 0.8, "colsample_bytree": 0.8,
+        "scale_pos_weight": spw, "lambda": 1.0, "alpha": 0.1,
+        "seed": SEED, "tree_method": "hist", "verbosity": 0,
+    }
+    xgb.train(params, dtrain_full, num_boost_round=500,
+              evals=[(dtrain_full, "train"), (dval_full, "val")],
+              early_stopping_rounds=30, verbose_eval=0,
+              evals_result=evals_result)
+
+    # --- Plot ---
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+
+    pcts = [int(f * 100) for f in fracs]
+    axes[0].plot(pcts, train_f1s, "o-", color="#2C5282", label="Train F1", lw=2)
+    axes[0].plot(pcts, test_f1s,  "s-", color="#E53E3E", label="Test F1", lw=2)
+    axes[0].set_xlabel("Training Data (%)")
+    axes[0].set_ylabel("F1-Score")
+    axes[0].set_title("Learning Curve: F1 vs Training Data Size")
+    axes[0].legend(); axes[0].grid(alpha=0.3)
+    axes[0].spines[["top", "right"]].set_visible(False)
+
+    n_rounds = len(evals_result["train"]["auc"])
+    axes[1].plot(range(n_rounds), evals_result["train"]["auc"], color="#2C5282",
+                 label="Train AUC", lw=1.5, alpha=0.7)
+    axes[1].plot(range(n_rounds), evals_result["val"]["auc"], color="#E53E3E",
+                 label="Val AUC", lw=1.5, alpha=0.7)
+    axes[1].set_xlabel("Boosting Rounds")
+    axes[1].set_ylabel("AUC")
+    axes[1].set_title("Convergence: AUC vs Boosting Rounds")
+    axes[1].legend(); axes[1].grid(alpha=0.3)
+    axes[1].spines[["top", "right"]].set_visible(False)
+
+    plt.tight_layout()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_dir / "learning_curves.png", dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  Saved learning curves -> {out_dir / 'learning_curves.png'}")
+
 
 # ---------------------------------------------------------------------------
 # Main
@@ -364,12 +589,12 @@ def run(processed_dir: Path, out_dir: Path):
     print("  BINARY ICP CLASSIFIER  |  Normal vs Abnormal (>=15 mmHg)")
     print(f"{SEP}")
 
-    print("\n[1/5] Loading and relabelling data ...")
+    print("\n[1/7] Loading and relabelling data ...")
     X, y, pid = load_binary(processed_dir)
     print(f"  Total: {len(X):,} windows | {len(np.unique(pid))} patients | 6 features")
     print_dist(y, "Combined")
 
-    print("\n[2/5] Dataset-stratified split (70 / 10 / 20) ...")
+    print("\n[2/7] Dataset-stratified split (70 / 10 / 20) ...")
     X_tr, y_tr, pid_tr, X_va, y_va, pid_va, X_te, y_te, pid_te = \
         patient_split(X, y, pid)
     print(f"  Train : {len(X_tr):,} windows | {len(np.unique(pid_tr))} patients")
@@ -387,15 +612,59 @@ def run(processed_dir: Path, out_dir: Path):
 
     bst, spw = train(X_tr, y_tr, X_va_es, y_va_es)
 
-    print("\n[3.5/5] Calibrating probabilities (cross-validated isotonic on val set) ...")
-    calibrator, threshold, ece_before, ece_after = calibrate(bst, X_va, y_va, pid_va)
-    print(f"  ECE before: {ece_before:.4f}  ->  after: {ece_after:.4f}")
-    print(f"  Optimal threshold (max val-F1): {threshold:.4f}")
+    # Find optimal threshold on RAW probabilities using Youden's J on val set
+    # Isotonic calibration was squishing probs (max 0.999->0.82), destroying recall.
+    print("\n[3.5/7] Finding optimal threshold (Youden's J on val set) ...")
+    dval_full = xgb.DMatrix(X_va)
+    val_probs = bst.predict(dval_full)
+    ece_raw = _ece(y_va, val_probs)
+    fpr_v, tpr_v, thr_v = roc_curve(y_va, val_probs)
+    j_idx = np.argmax(tpr_v - fpr_v)
+    threshold = float(thr_v[j_idx])
+    # Also check: best F1 threshold with recall >= 0.75
+    thresholds_scan = np.linspace(0.1, 0.9, 161)
+    best_f1_t, best_f1_v = threshold, 0.0
+    for t in thresholds_scan:
+        preds = (val_probs >= t).astype(int)
+        f = f1_score(y_va, preds, zero_division=0)
+        r = recall_score(y_va, preds, zero_division=0)
+        if r >= 0.75 and f > best_f1_v:
+            best_f1_v, best_f1_t = f, float(t)
+    if best_f1_v > 0:
+        threshold = best_f1_t
+    print(f"  Youden's J threshold: {float(thr_v[j_idx]):.4f}")
+    print(f"  Selected threshold (F1-opt, recall>=0.75): {threshold:.4f}")
+    print(f"  Val ECE (raw): {ece_raw:.4f}")
+    calibrator = None  # no calibration — raw probs are better
+    ece_before = round(ece_raw, 4)
+    ece_after = round(ece_raw, 4)  # same since no calibration
 
-    print("\n[4/5] Evaluating (calibrated) ...")
-    metrics = evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir, calibrator, threshold)
+    print("\n[4/7] Evaluating (raw probabilities) ...")
+    metrics = evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir, None, threshold)
 
-    print("[5/5] Saving model + calibrator ...")
+    # --- 5-fold Grouped CV ---
+    print("\n[5/7] Running 5-fold grouped cross-validation ...")
+    cv_results = grouped_cv(X, y, pid, n_splits=5)
+
+    # --- Bootstrap CIs ---
+    print("\n[6/7] Computing bootstrapped 95% confidence intervals ...")
+    dte = xgb.DMatrix(X_te)
+    prob_te = bst.predict(dte)
+    pred_te = (prob_te >= threshold).astype(int)
+
+    ci = bootstrap_ci(y_te, pred_te, prob_te, pid_te, n_boot=1000)
+    print(f"  F1  : {metrics['f1']:.4f}  95% CI [{ci['f1'][0]:.4f}, {ci['f1'][1]:.4f}]")
+    print(f"  AUC : {metrics['auc']:.4f}  95% CI [{ci['auc'][0]:.4f}, {ci['auc'][1]:.4f}]")
+    print(f"  Prec: {metrics['precision']:.4f}  95% CI [{ci['prec'][0]:.4f}, {ci['prec'][1]:.4f}]")
+    print(f"  Rec : {metrics['recall']:.4f}  95% CI [{ci['rec'][0]:.4f}, {ci['rec'][1]:.4f}]")
+    metrics["ci_95"] = ci
+
+    # --- Learning Curves ---
+    print("\n[6.5/7] Generating learning curves ...")
+    plot_learning_curves(X_tr, y_tr, X_va_es, y_va_es, X_te, y_te, out_dir)
+
+    # --- Save ---
+    print("\n[7/7] Saving model + calibrator ...")
     Path("models").mkdir(exist_ok=True)
 
     pkl_path = Path("models/xgboost_binary.pkl")
@@ -421,8 +690,12 @@ def run(processed_dir: Path, out_dir: Path):
     from datetime import date
     n_mimic   = int(len(np.unique(pid[pid > 13])))
     n_charis  = int(len(np.unique(pid[pid <= 13])))
+
+    cv_f1s  = [m["f1"]  for m in cv_results]
+    cv_aucs = [m["auc"] for m in cv_results]
+
     meta = {
-        "version":               "2.2",
+        "version":               "3.0",
         "training_date":         date.today().isoformat(),
         "scale_pos_weight":      spw,
         "threshold_mmhg":        15.0,
@@ -436,8 +709,31 @@ def run(processed_dir: Path, out_dir: Path):
             "total_windows":     int(len(X)),
         },
         "metrics": metrics,
+        "cross_validation": {
+            "n_folds":   5,
+            "f1_mean":   round(float(np.mean(cv_f1s)), 4),
+            "f1_std":    round(float(np.std(cv_f1s)), 4),
+            "auc_mean":  round(float(np.mean(cv_aucs)), 4),
+            "auc_std":   round(float(np.std(cv_aucs)), 4),
+        },
+        "confidence_intervals": {
+            "f1_95ci":   [round(ci["f1"][0], 4), round(ci["f1"][1], 4)],
+            "auc_95ci":  [round(ci["auc"][0], 4), round(ci["auc"][1], 4)],
+        },
     }
     (Path("models") / "binary_meta.json").write_text(json.dumps(meta, indent=2))
+
+    # Final summary
+    print(f"\n{'='*60}")
+    print(f"  FINAL SUMMARY")
+    print(f"{'='*60}")
+    print(f"  Test F1  : {metrics['f1']:.4f}  (target >= 0.80: {'PASS' if metrics['f1'] >= 0.80 else 'FAIL'})")
+    print(f"  Test AUC : {metrics['auc']:.4f}  (target >= 0.85: {'PASS' if metrics['auc'] >= 0.85 else 'FAIL'})")
+    print(f"  5-fold CV F1  : {np.mean(cv_f1s):.4f} ± {np.std(cv_f1s):.4f}")
+    print(f"  5-fold CV AUC : {np.mean(cv_aucs):.4f} ± {np.std(cv_aucs):.4f}")
+    print(f"  95% CI F1     : [{ci['f1'][0]:.4f}, {ci['f1'][1]:.4f}]")
+    print(f"  95% CI AUC    : [{ci['auc'][0]:.4f}, {ci['auc'][1]:.4f}]")
+    print(f"{'='*60}\n")
 
 
 def main():
@@ -453,3 +749,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

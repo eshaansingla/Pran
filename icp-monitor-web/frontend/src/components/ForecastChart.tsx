@@ -4,6 +4,7 @@ import {
 } from 'recharts'
 import type { ForecastResult } from '../types'
 import { useStore } from '../store/useStore'
+import { probToICP } from '../utils/formatters'
 
 interface Props {
   sequence:   number[][]
@@ -18,6 +19,8 @@ interface ChartPoint {
   forecastProb?: number    // 0-100 %
   ciLower?:      number    // 0-100 %
   ciUpper?:      number    // 0-100 %
+  histICP?:      number    // mmHg (right axis)
+  forecastICP?:  number    // mmHg (right axis)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -56,6 +59,7 @@ function buildChartData(
   })
 
   // Historical points
+  const XGB_THR = 0.545  // XGBoost threshold for probToICP anchor
   const points: ChartPoint[] = []
   for (let i = 0; i < dispLen; i++) {
     const tMin      = -(dispLen - 1 - i) * 10 / 60
@@ -64,6 +68,7 @@ function buildChartData(
       tMin:     +tMin.toFixed(3),
       label:    i === dispLen - 1 ? 'Now' : isTickMin ? `${Math.round(tMin)}m` : '',
       histProb: smooth[i],
+      histICP:  +probToICP(smooth[i] / 100, XGB_THR).toFixed(1),
     })
   }
 
@@ -81,6 +86,7 @@ function buildChartData(
   const bridgeProb = lastProb * 0.7 + firstFP * 0.3  // smooth transition
   const lastPt     = points[points.length - 1]
   lastPt.forecastProb = bridgeProb
+  lastPt.forecastICP  = +probToICP(bridgeProb / 100, XGB_THR).toFixed(1)
   lastPt.ciLower      = bridgeProb
   lastPt.ciUpper      = bridgeProb
 
@@ -104,6 +110,7 @@ function buildChartData(
       tMin:        m,
       label:       m === horizonMin ? `+${m}m` : m % 5 === 0 ? `+${m}m` : '',
       forecastProb: fp,
+      forecastICP:  +probToICP(fp / 100, XGB_THR).toFixed(1),
       ciLower:     Math.min(fp, +(blend * lastProb + (1 - blend) * lo).toFixed(1)),
       ciUpper:     Math.max(fp, +(blend * lastProb + (1 - blend) * hi).toFixed(1)),
     })
@@ -168,6 +175,16 @@ export default function ForecastChart({ sequence, result, histProbs }: Props) {
   const isAbn      = result.class === 1
   const thrPct     = +(result.threshold * 100).toFixed(1)
 
+  // Only show historical amber line when there is meaningful variation (range > 5 pp).
+  // A flat line at 2% for 5 minutes adds no clinical information and looks broken.
+  const showHistLine = (() => {
+    const vals = histProbs ?? []
+    if (vals.length < 2) return false
+    const mn = Math.min(...vals) * 100
+    const mx = Math.max(...vals) * 100
+    return mx - mn > 5
+  })()
+
   const histColor  = isDark ? '#F59E0B' : '#D97706'
   const foreColor  = isAbn
     ? (isDark ? '#EF4444' : '#DC2626')
@@ -182,7 +199,7 @@ export default function ForecastChart({ sequence, result, histProbs }: Props) {
   return (
     <div aria-label="ICP forecast chart" role="img">
       <ResponsiveContainer width="100%" height={280}>
-        <ComposedChart data={data} margin={{ top: 8, right: 32, left: 0, bottom: 4 }}>
+        <ComposedChart data={data} margin={{ top: 8, right: 52, left: 0, bottom: 4 }}>
 
           <defs>
             <linearGradient id="forecastUncertainty" x1="0" y1="0" x2="1" y2="0">
@@ -192,11 +209,11 @@ export default function ForecastChart({ sequence, result, histProbs }: Props) {
           </defs>
 
           {/* Normal / Abnormal probability zones */}
-          <ReferenceArea y1={0}      y2={thrPct} fill={isDark ? '#064E3B' : '#ECFDF5'} fillOpacity={0.18} />
-          <ReferenceArea y1={thrPct} y2={100}    fill={isDark ? '#450A0A' : '#FEF2F2'} fillOpacity={0.18} />
+          <ReferenceArea yAxisId="left" y1={0}      y2={thrPct} fill={isDark ? '#064E3B' : '#ECFDF5'} fillOpacity={0.18} />
+          <ReferenceArea yAxisId="left" y1={thrPct} y2={100}    fill={isDark ? '#450A0A' : '#FEF2F2'} fillOpacity={0.18} />
 
           {/* Forecast region shade */}
-          <ReferenceArea x1={0} x2={hMin} fill={isDark ? '#1E293B' : '#F8FAFC'} fillOpacity={0.50} />
+          <ReferenceArea yAxisId="left" x1={0} x2={hMin} fill={isDark ? '#1E293B' : '#F8FAFC'} fillOpacity={0.50} />
 
           <CartesianGrid strokeDasharray="3 3" stroke={gridColor} vertical={false} />
 
@@ -212,6 +229,7 @@ export default function ForecastChart({ sequence, result, histProbs }: Props) {
           />
 
           <YAxis
+            yAxisId="left"
             domain={[0, 100]}
             ticks={[0, 20, 40, 60, 80, 100]}
             tickFormatter={v => `${v}%`}
@@ -222,42 +240,67 @@ export default function ForecastChart({ sequence, result, histProbs }: Props) {
             label={{ value: 'P(Abn)', angle: -90, position: 'insideLeft', offset: 10, fontSize: 9, fill: tickColor }}
           />
 
+          {/* Right Y-axis: Est. ICP mmHg */}
+          <YAxis
+            yAxisId="right"
+            orientation="right"
+            domain={[5, 40]}
+            ticks={[5, 10, 15, 20, 25, 30, 35, 40]}
+            tickFormatter={v => `${v}`}
+            tick={{ fontSize: 9, fill: isDark ? '#94A3B8' : '#64748B' }}
+            tickLine={false}
+            axisLine={false}
+            width={28}
+            label={{ value: 'ICP mmHg', angle: 90, position: 'insideRight', offset: 10, fontSize: 9, fill: isDark ? '#94A3B8' : '#64748B' }}
+          />
+
           {/* Now marker */}
-          <ReferenceLine x={0}
+          <ReferenceLine yAxisId="left" x={0}
             stroke={isDark ? '#475569' : '#9CA3AF'}
             strokeDasharray="4 3"
             label={{ value: 'Now', fontSize: 8, fill: tickColor, position: 'insideTopLeft' }}
           />
 
           {/* Horizon marker */}
-          <ReferenceLine x={hMin}
+          <ReferenceLine yAxisId="left" x={hMin}
             stroke={foreColor} strokeDasharray="3 2" strokeOpacity={0.65}
             label={{ value: `+${hMin}m`, fontSize: 8, fill: foreColor, position: 'insideTopRight' }}
           />
 
-          {/* Decision threshold line */}
-          <ReferenceLine y={thrPct}
+          {/* Decision threshold line (left axis) */}
+          <ReferenceLine yAxisId="left" y={thrPct}
             stroke={isDark ? '#F59E0B' : '#D97706'}
             strokeDasharray="5 3"
             strokeOpacity={0.8}
-            label={{ value: `${thrPct}%`, fontSize: 8, fill: isDark ? '#F59E0B' : '#D97706', position: 'right' }}
+            label={{ value: `${thrPct}%`, fontSize: 8, fill: isDark ? '#F59E0B' : '#D97706', position: 'insideLeft' }}
+          />
+
+          {/* ICP = 15 mmHg clinical threshold (right axis) */}
+          <ReferenceLine yAxisId="right" y={15}
+            stroke={isDark ? '#F59E0B' : '#D97706'}
+            strokeDasharray="3 4"
+            strokeOpacity={0.55}
+            label={{ value: '15 mmHg', fontSize: 8, fill: isDark ? '#F59E0B' : '#D97706', position: 'insideRight' }}
           />
 
           <Tooltip content={<ForecastTooltip isDark={isDark} result={result} />} />
 
-          {/* 95% CI band */}
-          <Area type="monotone" dataKey="ciUpper" stroke="none"
+          {/* 95% CI band (left axis) */}
+          <Area yAxisId="left" type="monotone" dataKey="ciUpper" stroke="none"
             fill="url(#forecastUncertainty)" isAnimationActive={false} connectNulls={false} legendType="none" />
-          <Area type="monotone" dataKey="ciLower" stroke="none"
+          <Area yAxisId="left" type="monotone" dataKey="ciLower" stroke="none"
             fill={bgColor} fillOpacity={1} isAnimationActive={false} connectNulls={false} legendType="none" />
 
-          {/* Historical P(Abnormal) — solid amber */}
-          <Line type="monotone" dataKey="histProb"
-            stroke={histColor} strokeWidth={2.5} dot={false}
-            isAnimationActive={false} connectNulls={false} name="XGBoost P(Abn)" />
+          {/* Historical P(Abnormal) — solid amber (left axis); hidden when flat */}
+          {showHistLine && (
+            <Line yAxisId="left" type="monotone" dataKey="histProb"
+              stroke={histColor} strokeWidth={2.5} dot={false}
+              isAnimationActive={false} connectNulls={false} name="XGBoost P(Abn)" />
+          )}
 
-          {/* LSTM Forecast P(Abnormal) — dashed, class-colored */}
+          {/* LSTM Forecast P(Abnormal) — dashed, class-colored (left axis) */}
           <Line
+            yAxisId="left"
             type="monotone"
             dataKey="forecastProb"
             stroke={foreColor}
@@ -278,21 +321,44 @@ export default function ForecastChart({ sequence, result, histProbs }: Props) {
             name="LSTM Forecast P(Abn)"
           />
 
+          {/* Historical Est. ICP mmHg — amber dashed (right axis); hidden when flat */}
+          {showHistLine && (
+            <Line yAxisId="right" type="monotone" dataKey="histICP"
+              stroke={histColor} strokeWidth={1.5} strokeDasharray="3 3" dot={false} strokeOpacity={0.65}
+              isAnimationActive={false} connectNulls={false} name="Hist. Est. ICP" />
+          )}
+
+          {/* Forecast Est. ICP mmHg — class-colored dotted (right axis) */}
+          <Line yAxisId="right" type="monotone" dataKey="forecastICP"
+            stroke={foreColor} strokeWidth={1.5} strokeDasharray="2 4" dot={false} strokeOpacity={0.65}
+            isAnimationActive={false} connectNulls={false} name="Forecast Est. ICP" />
+
         </ComposedChart>
       </ResponsiveContainer>
 
       {/* Legend */}
       <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-0.5 mt-1 text-2xs">
-        <span className="flex items-center gap-1.5">
-          <span className="w-5 h-[2px] inline-block rounded" style={{ backgroundColor: histColor }} />
-          <span style={{ color: histColor }}>Historical P(Abn)</span>
-        </span>
-        <span className="text-clinical-text-muted dark:text-slate-600">·</span>
+        {showHistLine && (
+          <>
+            <span className="flex items-center gap-1.5">
+              <span className="w-5 h-[2px] inline-block rounded" style={{ backgroundColor: histColor }} />
+              <span style={{ color: histColor }}>Historical P(Abn) [left]</span>
+            </span>
+            <span className="text-clinical-text-muted dark:text-slate-600">·</span>
+          </>
+        )}
         <span className="flex items-center gap-1.5">
           <span className="w-5 h-[2px] inline-block rounded" style={{
             background: `repeating-linear-gradient(90deg,${foreColor} 0,${foreColor} 6px,transparent 6px,transparent 9px)`,
           }} />
-          <span style={{ color: foreColor }}>LSTM Forecast P(Abn)</span>
+          <span style={{ color: foreColor }}>LSTM Forecast P(Abn) [left]</span>
+        </span>
+        <span className="text-clinical-text-muted dark:text-slate-600">·</span>
+        <span className="flex items-center gap-1.5">
+          <span className="w-5 h-[2px] inline-block rounded opacity-65" style={{
+            background: `repeating-linear-gradient(90deg,${histColor} 0,${histColor} 3px,transparent 3px,transparent 6px)`,
+          }} />
+          <span className="text-clinical-text-muted dark:text-slate-500">Est. ICP mmHg [right]</span>
         </span>
         <span className="text-clinical-text-muted dark:text-slate-600">·</span>
         <span className="text-clinical-text-muted dark:text-slate-500">

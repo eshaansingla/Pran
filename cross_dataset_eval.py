@@ -48,20 +48,18 @@ def _print_dist(y: np.ndarray, tag: str) -> None:
 
 
 def _load(processed_dir: Path) -> tuple:
-    """Load CHARIS (first 8 features) and MIMIC (8 features) arrays."""
+    """Load CHARIS and MIMIC arrays, select the 6 validated features."""
+    KEEP = [0, 1, 2, 3, 4, 5]   # same as train_binary.py
 
     # CHARIS
-    ch_feat = np.load(processed_dir / "features.npy").astype(np.float32)
+    ch_feat = np.load(processed_dir / "features.npy").astype(np.float32)[:, KEEP]
     ch_lab  = np.load(processed_dir / "labels.npy").astype(np.int64)
     ch_pid  = np.load(processed_dir / "patient_ids.npy").astype(np.int32)
-    ch_feat = ch_feat[:, :8]          # drop phase-lag columns
 
     # MIMIC
-    mi_feat = np.load(processed_dir / "mimic_features.npy").astype(np.float32)
+    mi_feat = np.load(processed_dir / "mimic_features.npy").astype(np.float32)[:, KEEP]
     mi_lab  = np.load(processed_dir / "mimic_labels.npy").astype(np.int64)
     mi_pid  = np.load(processed_dir / "mimic_patient_ids.npy").astype(np.int32)
-    if mi_feat.shape[1] > 8:
-        mi_feat = mi_feat[:, :8]
 
     return ch_feat, ch_lab, ch_pid, mi_feat, mi_lab, mi_pid
 

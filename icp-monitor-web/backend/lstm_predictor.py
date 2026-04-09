@@ -87,6 +87,21 @@ def get_load_error() -> str | None:
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
+def _rescale_for_lstm(arr: np.ndarray) -> np.ndarray:
+    """
+    Apply the same feature rescaling that lstm_forecaster.py applies before
+    fitting the scaler.  Must be called on raw CSV features before _scale().
+
+    col 4 (cardiac_power):    raw wavelet fraction [0, ~0.35]  → ×100
+    col 3 (slow_wave_power):  raw near-1.0 fraction            → (1 - val) × 100, clipped [0.05, 5.0]
+    """
+    arr = arr.copy().astype(np.float64)
+    arr[:, 4] = arr[:, 4] * 100
+    arr[:, 3] = (1.0 - arr[:, 3]) * 100
+    arr[:, 3] = np.clip(arr[:, 3], 0.05, 5.0)
+    return arr
+
+
 def _scale(sequence: np.ndarray) -> np.ndarray:
     """Standardise using training-set statistics stored in lstm_meta.json."""
     mean_ = np.array(_meta.get("scaler_mean", [0.0] * 6), dtype=np.float64)
@@ -171,6 +186,7 @@ def predict_forecast(sequence: list[list[float]]) -> dict[str, Any]:
 
     # Build (1, seq_len, 6) tensor
     arr_raw    = np.array(sequence[-seq_len:], dtype=np.float32)  # (30, 6)
+    arr_raw    = _rescale_for_lstm(arr_raw)   # match lstm_forecaster.py Step-1 rescaling
     arr_scaled = _scale(arr_raw)
     x_batch    = arr_scaled[np.newaxis, ...]                      # (1, 30, 6)
 

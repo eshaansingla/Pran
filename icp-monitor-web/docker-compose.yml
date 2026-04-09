@@ -8,7 +8,7 @@ services:
     volumes:
       - ../models:/models:ro   # mount project models/ read-only
     environment:
-      - MODEL_PATH=/models/xgboost_final.pkl.gz
+      - MODEL_PATH=/models/xgboost_binary.pkl.gz
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]

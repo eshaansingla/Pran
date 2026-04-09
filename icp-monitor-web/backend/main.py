@@ -215,58 +215,34 @@ async def predict_forecast(req: ForecastRequest) -> JSONResponse:
 
 @app.get("/api/example_csv")
 async def example_csv() -> JSONResponse:
-    """Return CSV content and column documentation.
+    """Return CSV content from the canonical example file.
 
-    35 windows (≈ 5.8 min session) with a realistic clinical progression:
-    windows 1–12  = Normal ICP (low cardiac amplitude, normal MAP)
-    windows 13–20 = Transitional (rising amplitude, rising MAP)
-    windows 21–35 = Elevated ICP (high cardiac amplitude, high MAP)
-
-    This allows both the XGBoost classifier (any rows) and the LSTM
-    forecaster (needs ≥30 consecutive windows) to process the example.
+    100 windows (≈ 16.7 min session) with sinusoidal physiological variation.
+    Features are raw wavelet fractions as produced by the optical TM sensor.
+    Supports both XGBoost (any rows) and LSTM (≥30 consecutive windows).
     """
-    header = ",".join(FEATURE_NAMES)
-    # Real abnormal ICP windows from CHARIS training data (patient with
-    # sustained ICP ≥ 15 mmHg).  These are actual wavelet-decomposed features,
-    # not synthetic data — both XGBoost and LSTM classify them correctly.
-    examples = [
-        "18.4301,0.9,10.5067,0.9996,0.0002,90.0",
-        "15.0236,1.0,9.3908,0.9996,0.0003,90.0",
-        "8.6077,0.9,14.9791,0.9997,0.0002,90.0",
-        "10.7876,0.9,10.2277,0.9997,0.0002,90.0",
-        "12.8993,0.9,6.5482,0.9997,0.0002,90.0",
-        "19.2205,1.1,14.7938,0.9997,0.0003,90.0",
-        "13.7015,1.0,7.6126,0.9997,0.0002,90.0",
-        "12.1234,1.0,9.3725,0.9997,0.0003,90.0",
-        "11.6073,0.9,7.862,0.9997,0.0002,90.0",
-        "11.1886,1.0,7.955,0.9998,0.0002,90.0",
-        "12.8783,1.0,7.0267,0.9997,0.0002,90.0",
-        "20.1959,1.0,14.444,0.9996,0.0003,90.0",
-        "19.279,1.1,16.6813,0.9997,0.0002,90.0",
-        "13.2876,1.0,9.9455,0.9998,0.0001,90.0",
-        "14.3342,1.0,5.0683,0.9997,0.0002,90.0",
-        "13.661,1.0,7.7301,0.9997,0.0002,90.0",
-        "12.9961,1.0,13.6344,0.9997,0.0002,90.0",
-        "15.6484,1.0,11.4988,0.9997,0.0002,90.0",
-        "23.3362,1.1,23.2443,0.9996,0.0003,90.0",
-        "19.8419,1.1,14.1219,0.9997,0.0002,90.0",
-        "13.9013,1.0,5.562,0.9996,0.0003,90.0",
-        "13.7342,1.0,8.2292,0.9997,0.0002,90.0",
-        "14.7992,1.0,11.3383,0.9997,0.0002,90.0",
-        "14.9636,1.0,13.8879,0.9997,0.0002,90.0",
-        "11.7043,1.0,8.8355,0.9997,0.0002,90.0",
-        "21.3241,1.0,16.5041,0.9997,0.0003,90.0",
-        "16.7522,1.1,23.844,0.9997,0.0002,90.0",
-        "12.5856,1.0,12.2864,0.9997,0.0002,90.0",
-        "15.7601,1.0,15.9538,0.9996,0.0003,90.0",
-        "15.1535,1.0,6.3553,0.9997,0.0002,90.0",
-        "17.0705,1.0,15.4231,0.9997,0.0002,90.0",
-        "16.9983,1.1,10.979,0.9997,0.0002,90.0",
-        "17.9153,1.1,10.8498,0.9997,0.0002,90.0",
-        "9.5918,1.0,14.4188,0.9998,0.0001,90.0",
-        "10.8899,1.0,7.061,0.9998,0.0001,90.0",
+    from pathlib import Path
+    import os
+
+    # Locate example CSV relative to this file
+    candidates = [
+        Path(__file__).parent.parent.parent / "data" / "lstm_input_correct.csv",
+        Path(__file__).parent.parent.parent / "data" / "sample_hardware_data.csv",
     ]
-    csv_content = header + "\n" + "\n".join(examples)
+    example_path = next((p for p in candidates if p.exists()), None)
+
+    if example_path and example_path.exists():
+        csv_content = example_path.read_text()
+    else:
+        # Fallback: minimal 35-window example with physiologically reasonable raw fractions
+        header = ",".join(FEATURE_NAMES)
+        fallback_rows = [
+            f"{20 + i * 1.1:.4f},{0.9 + (i % 5) * 0.1:.1f},{5 + i * 0.4:.4f},"
+            f"{0.997 - i * 0.0003:.4f},{0.005 + i * 0.0005:.6f},{80 + i * 0.5:.4f}"
+            for i in range(35)
+        ]
+        csv_content = header + "\n" + "\n".join(fallback_rows)
+
     return JSONResponse({"csv": csv_content, "header": FEATURE_NAMES})
 
 

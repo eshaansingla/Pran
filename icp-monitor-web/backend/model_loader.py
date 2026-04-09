@@ -38,17 +38,16 @@ FEATURE_UNITS = {
     "mean_arterial_pressure": "mmHg",
 }
 FEATURE_RANGES = {
-    "cardiac_amplitude":      (10.0, 80.0),
-    "cardiac_frequency":      (0.8, 2.5),
-    "respiratory_amplitude":  (2.0, 30.0),
-    # slow_wave_power = wavelet energy fraction in 0–1.56 Hz band (db4, level-5 approximation).
-    # Hard upper bound is 1.0 (fraction). Training mean ≈ 0.999, std ≈ 0.012.
-    "slow_wave_power":        (0.50, 1.0),
-    # cardiac_power = wavelet energy fraction in 1.56–3.12 Hz band (db4, level-5 detail).
-    # Hard upper bound is 1.0 (fraction). Training mean ≈ 0.004, std ≈ 0.006.
-    # Permissive upper bound covers 8σ above training mean.
-    "cardiac_power":          (0.0, 0.05),
-    "mean_arterial_pressure": (50.0, 150.0),
+    "cardiac_amplitude":      (5.0, 120.0),     # μm — widened for MIMIC variability
+    "cardiac_frequency":      (0.7, 2.5),       # Hz — 42-150 bpm
+    "respiratory_amplitude":  (1.0, 50.0),      # μm — widened for MIMIC variability
+    # slow_wave_power = wavelet energy fraction in 0–1.56 Hz band (db4, level-5).
+    # Near-1.0 = normal; lower = more high-freq activity.
+    "slow_wave_power":        (0.30, 1.0),
+    # cardiac_power = wavelet energy fraction in 1.56–3.12 Hz band.
+    # Training data max reaches ~0.35 for unusual MIMIC spectra.
+    "cardiac_power":          (0.0, 0.40),
+    "mean_arterial_pressure": (40.0, 200.0),    # mmHg — clamped in extraction
 }
 CLASS_NAMES = ["Normal", "Abnormal"]
 

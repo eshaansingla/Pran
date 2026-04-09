@@ -46,12 +46,12 @@ FEATURE_NAMES = [
 NUM_FEATURES = len(FEATURE_NAMES)
 
 FEATURE_RANGES = {
-    "cardiac_amplitude":      (10.0, 80.0),
-    "cardiac_frequency":      (0.8, 2.5),
-    "respiratory_amplitude":  (2.0, 30.0),
-    "slow_wave_power":        (0.05, 5.0),
-    "cardiac_power":          (0.1, 5.0),
-    "mean_arterial_pressure": (50.0, 150.0),
+    "cardiac_amplitude":      (5.0, 120.0),
+    "cardiac_frequency":      (0.7, 2.5),
+    "respiratory_amplitude":  (1.0, 50.0),
+    "slow_wave_power":        (0.30, 1.0),
+    "cardiac_power":          (0.0, 0.40),
+    "mean_arterial_pressure": (40.0, 200.0),
 }
 
 CLASS_NAMES  = ["Normal", "Abnormal"]

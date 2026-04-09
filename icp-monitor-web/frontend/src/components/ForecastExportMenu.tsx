@@ -1,12 +1,13 @@
 import { useState, useRef, useEffect } from 'react'
 import { FileDown, ChevronDown, FileText, Table } from 'lucide-react'
 import type { ForecastResult } from '../types'
-import { downloadBlob, fmtFeatureName } from '../utils/formatters'
+import { downloadBlob, fmtFeatureName, probToICP } from '../utils/formatters'
 
 interface Props {
-  result:   ForecastResult
-  sequence: number[][]
-  fileName: string
+  result:     ForecastResult
+  sequence:   number[][]
+  fileName:   string
+  histProbs?: number[]   // per-window XGBoost P(abnormal) [0-1]
 }
 
 const FEATURE_NAMES = [
@@ -61,19 +62,17 @@ function exportForecastCSV(result: ForecastResult, sequence: number[][], fileNam
   )
 }
 
-// ── MAP z-score reconstruction ────────────────────────────────────────────────
-const MAP_MEAN_PDF = 82.626
-const MAP_STD_PDF  = 7.825
-function toRawMAPpdf(v: number): number { return v > 50 ? v : v * MAP_STD_PDF + MAP_MEAN_PDF }
+const LSTM_THR_PDF = 0.545  // XGBoost / LSTM threshold for probToICP anchor
 
 // ── Clinical normal bounds for each feature ──────────────────────────────────
 // Values outside these ranges are flagged as out-of-bounds and bolded in the PDF.
+// Ranges match XGBoost / inference pipeline scale (not raw wavelet fractions).
 const CLINICAL_BOUNDS: Record<string, { lo: number; hi: number; unit: string }> = {
   cardiac_amplitude:       { lo: 10,   hi: 60,   unit: 'a.u.' },
   cardiac_frequency:       { lo: 0.8,  hi: 2.0,  unit: 'Hz' },
   respiratory_amplitude:   { lo: 3,    hi: 25,   unit: 'a.u.' },
-  slow_wave_power:         { lo: 0.97, hi: 1.0,  unit: 'frac' },
-  cardiac_power:           { lo: 0.0,  hi: 0.015,unit: 'frac' },
+  slow_wave_power:         { lo: 0.3,  hi: 2.5,  unit: 'scaled' },
+  cardiac_power:           { lo: 0.1,  hi: 5.0,  unit: 'scaled' },
   mean_arterial_pressure:  { lo: 70,   hi: 105,  unit: 'mmHg' },
 }
 function isOutOfBounds(name: string, value: number): boolean {
@@ -82,7 +81,12 @@ function isOutOfBounds(name: string, value: number): boolean {
   return value < b.lo || value > b.hi
 }
 
-async function exportForecastPDF(result: ForecastResult, sequence: number[][], fileName: string) {
+async function exportForecastPDF(
+  result: ForecastResult,
+  sequence: number[][],
+  fileName: string,
+  histProbs?: number[],
+) {
   const { jsPDF } = await import('jspdf')
   const doc    = new jsPDF({ unit: 'mm', format: 'a4' })
   const now    = new Date().toLocaleString('en-GB', { hour12: false })
@@ -90,9 +94,15 @@ async function exportForecastPDF(result: ForecastResult, sequence: number[][], f
   const thr    = result.threshold
   const predColor: [number,number,number] = isAbn ? [220, 38, 38] : [5, 150, 105]
 
-  // Compute MAP stats from sequence
-  const mapVals  = sequence.map(r => toRawMAPpdf(r[5])).filter(v => v > 0)
-  const mapMean  = mapVals.length ? mapVals.reduce((a, b) => a + b, 0) / mapVals.length : 0
+  // Compute ICP stats from histProbs (XGBoost per-window probabilities)
+  // Fallback: use forecast_probabilities if histProbs not supplied.
+  const probSource = (histProbs && histProbs.length > 0)
+    ? histProbs
+    : (result.forecast_probabilities ?? [result.probability])
+  const histICPs = probSource.map(p => probToICP(p, LSTM_THR_PDF))
+  const icpMean  = histICPs.reduce((a, b) => a + b, 0) / histICPs.length
+  const icpMin   = Math.min(...histICPs)
+  const icpMax   = Math.max(...histICPs)
 
   let y = 18
   const L = 14
@@ -160,16 +170,16 @@ async function exportForecastPDF(result: ForecastResult, sequence: number[][], f
   line('Classifier Probability Summary:', { bold: true, size: 10 })
   gap(1)
 
+  const icpAbn = icpMean >= 15
   const probRows: Array<[string, string, boolean]> = [
-    ['P(Abnormal)',    `${(result.probability * 100).toFixed(1)}%`,  isAbn],
-    ['P(Normal)',      `${(result.probabilities[0] * 100).toFixed(1)}%`,  !isAbn],
-    ['95% CI lower',  `${(result.ci_lower * 100).toFixed(1)}%`,     result.ci_lower >= thr],
-    ['95% CI upper',  `${(result.ci_upper * 100).toFixed(1)}%`,     result.ci_upper >= thr],
+    ['P(Abnormal)',      `${(result.probability * 100).toFixed(1)}%`,      isAbn],
+    ['P(Normal)',        `${(result.probabilities[0] * 100).toFixed(1)}%`, !isAbn],
+    ['95% CI lower',    `${(result.ci_lower * 100).toFixed(1)}%`,          result.ci_lower >= thr],
+    ['95% CI upper',    `${(result.ci_upper * 100).toFixed(1)}%`,          result.ci_upper >= thr],
+    ['Est. ICP (mean)', `${icpMean.toFixed(1)} mmHg`,                      icpAbn],
+    ['Est. ICP (min)',  `${icpMin.toFixed(1)} mmHg`,                        icpMin >= 15],
+    ['Est. ICP (max)',  `${icpMax.toFixed(1)} mmHg`,                        icpMax >= 15],
   ]
-  if (mapVals.length > 0) {
-    const mapAbn = mapMean < 70 || mapMean > 105
-    probRows.push(['Mean MAP (history)', `${mapMean.toFixed(1)} mmHg`, mapAbn])
-  }
 
   doc.setFillColor(241, 245, 249)
   doc.rect(L, y - 1, W, 6, 'F')
@@ -285,6 +295,52 @@ async function exportForecastPDF(result: ForecastResult, sequence: number[][], f
   })
   gap(3); rule()
 
+  // ── Section 4b: WINDOW-BY-WINDOW ANALYSIS ────────────────────────────────
+  if (y > 200) { doc.addPage(); y = 18 }
+  line('3b. WINDOW-BY-WINDOW ANALYSIS', { bold: true, size: 12 })
+  gap(1)
+  line('Shows XGBoost P(Abnormal) and estimated ICP for each 10-second window.', { size: 8, color: [100, 116, 139] })
+  line('Bold red = any feature outside clinical bounds.', { size: 8, color: [100, 116, 139] })
+  gap(1)
+
+  // Header row
+  doc.setFillColor(241, 245, 249)
+  doc.rect(L, y - 1, W, 5, 'F')
+  text('Window', { size: 8, bold: true, color: [51, 65, 85] })
+  text('Time (min)', { size: 8, bold: true, color: [51, 65, 85], x: L + 20 })
+  text('P(Abn)%', { size: 8, bold: true, color: [51, 65, 85], x: L + 55 })
+  text('Est. ICP mmHg', { size: 8, bold: true, color: [51, 65, 85], x: L + 85 })
+  text('Classification', { size: 8, bold: true, color: [51, 65, 85], x: L + 130 })
+  y += 5
+
+  const winProbs = (histProbs && histProbs.length > 0) ? histProbs : probSource
+  const thrForWin = result.threshold
+  winProbs.forEach((prob, i) => {
+    if (y > 270) { doc.addPage(); y = 18 }
+    const tMin    = +((i * 10) / 60).toFixed(1)
+    const pAbn    = (prob * 100).toFixed(1)
+    const estICP  = probToICP(prob, LSTM_THR_PDF).toFixed(1)
+    const cls     = prob >= thrForWin ? 'Abnormal' : 'Normal'
+    const clsAbn  = prob >= thrForWin
+    // Check if any feature in this row is out of clinical bounds
+    const row     = sequence[i] ?? []
+    const anyOOB  = FEATURE_NAMES.some((name, j) => row[j] !== undefined && isOutOfBounds(name, row[j]))
+
+    const rowFill: [number,number,number] = anyOOB ? [254, 242, 242] : (i % 2 === 0 ? [248, 250, 252] : [255, 255, 255])
+    doc.setFillColor(...rowFill)
+    doc.rect(L, y - 1, W, 5, 'F')
+
+    const txtC: [number,number,number] = anyOOB ? [220, 38, 38] : [51, 65, 85]
+    text(`${i + 1}`, { size: 8, bold: anyOOB, color: txtC })
+    text(`+${tMin}`, { size: 8, color: txtC, x: L + 20 })
+    text(`${pAbn}%`, { size: 8, bold: anyOOB || clsAbn, color: clsAbn ? [220, 38, 38] : [5, 150, 105], x: L + 55 })
+    text(`${estICP}`, { size: 8, bold: anyOOB || clsAbn, color: clsAbn ? [220, 38, 38] : [5, 150, 105], x: L + 85 })
+    text(cls, { size: 8, bold: clsAbn, color: clsAbn ? [220, 38, 38] : [5, 150, 105], x: L + 130 })
+    if (anyOOB) text('⚠ out-of-range feature', { size: 7, bold: true, color: [220, 38, 38], x: L + 158 })
+    y += 5
+  })
+  gap(3); rule()
+
   // ── Section 5: ATTENTION & FEATURE IMPORTANCE ─────────────────────────────
   if (y > 220) { doc.addPage(); y = 18 }
   line('4. KEY DRIVING FEATURES (LSTM Attention)', { bold: true, size: 12 })
@@ -374,7 +430,7 @@ async function exportForecastPDF(result: ForecastResult, sequence: number[][], f
   doc.save(`ICP_Forecast_Report_${fileName.replace('.csv', '')}_${Date.now()}.pdf`)
 }
 
-export default function ForecastExportMenu({ result, sequence, fileName }: Props) {
+export default function ForecastExportMenu({ result, sequence, fileName, histProbs }: Props) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -414,7 +470,7 @@ export default function ForecastExportMenu({ result, sequence, fileName }: Props
             Export CSV
           </button>
           <button
-            onClick={() => { exportForecastPDF(result, sequence, fileName); setOpen(false) }}
+            onClick={() => { exportForecastPDF(result, sequence, fileName, histProbs); setOpen(false) }}
             className="w-full flex items-center gap-2 px-4 py-2.5 text-sm text-clinical-text-primary dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors text-left border-t border-clinical-border dark:border-slate-700"
           >
             <FileText size={14} className="text-clinical-text-muted dark:text-slate-400" />

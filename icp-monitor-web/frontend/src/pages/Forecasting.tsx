@@ -446,7 +446,7 @@ export default function Forecasting() {
             </p>
           </div>
           <div className="flex items-center gap-2">
-            <ForecastExportMenu result={result} sequence={sequence} fileName={fileName} />
+            <ForecastExportMenu result={result} sequence={sequence} fileName={fileName} histProbs={histProbs} />
             <button
               onClick={reset}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium

@@ -26,13 +26,22 @@ from pathlib import Path
 
 import numpy as np
 
-# ── Credentials ────────────────────────────────────────────────────────────────
-USERNAME = "eshaansingla2005"
-PASSWORD = "+5Q5,,jdcy_ty8"
-AUTH     = (USERNAME, PASSWORD)
+# ── Credentials (from environment — NEVER hardcode) ───────────────────────────
+# Set PHYSIONET_USERNAME and PHYSIONET_PASSWORD in your shell or .env file.
+# See .env.example for the template.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass  # python-dotenv is optional
 
-os.environ["PHYSIONET_USERNAME"] = USERNAME
-os.environ["PHYSIONET_PASSWORD"] = PASSWORD
+USERNAME = os.environ.get("PHYSIONET_USERNAME", "")
+PASSWORD = os.environ.get("PHYSIONET_PASSWORD", "")
+if not USERNAME or not PASSWORD:
+    print("ERROR: Set PHYSIONET_USERNAME and PHYSIONET_PASSWORD environment variables.")
+    print("       See .env.example for the template.")
+    sys.exit(1)
+AUTH = (USERNAME, PASSWORD)
 
 BASE_URL = "https://physionet.org/files/mimic3wdb/1.0"
 MIMIC_DB = "mimic3wdb/1.0"
@@ -96,10 +105,17 @@ def _bandpass(sig: np.ndarray, low: float, high: float, order: int = 4) -> np.nd
 
 
 def _extract_8(win: np.ndarray, abp_win: np.ndarray | None = None) -> np.ndarray:
-    """Extract the 8 validated features (no phase-lag)."""
+    """Extract the 8 validated features (no phase-lag).
+
+    Returns np.ndarray of shape (8,) or raises ValueError if features
+    contain NaN (caller should skip that window).
+    """
     if np.any(np.isnan(win)):
         win = win.copy()
-        win[np.isnan(win)] = float(np.nanmedian(win))
+        median_val = float(np.nanmedian(win))
+        if np.isnan(median_val):
+            raise ValueError("Window is entirely NaN")
+        win[np.isnan(win)] = median_val
 
     # 0 cardiac_amplitude  1-2 Hz peak-to-peak in um
     cb = _bandpass(win, 1.0, 2.0)
@@ -133,15 +149,25 @@ def _extract_8(win: np.ndarray, abp_win: np.ndarray | None = None) -> np.ndarray
         slow_pwr = float(pw[(fq <= 1.56)].sum() / tot)
         card_pwr = float(pw[(fq > 1.56) & (fq <= 3.12)].sum() / tot)
 
-    # 5 mean_arterial_pressure
+    # 5 mean_arterial_pressure — clamp to physiological range [40, 200] mmHg
     if abp_win is not None:
-        map_val = float(np.nanmean(abp_win))
+        abp_clean = abp_win[~np.isnan(abp_win)] if np.any(np.isnan(abp_win)) else abp_win
+        if len(abp_clean) > 0:
+            map_val = float(np.clip(np.mean(abp_clean), 40.0, 200.0))
+        else:
+            map_val = 90.0  # fallback: no valid ABP samples
     else:
         sig_mean = float(np.nanmean(win))
-        map_val  = sig_mean if sig_mean > 50.0 else 90.0
+        map_val  = sig_mean if 40.0 <= sig_mean <= 200.0 else 90.0
 
-    return np.array([cardiac_amp, cardiac_freq, resp_amp, slow_pwr, card_pwr,
+    feat = np.array([cardiac_amp, cardiac_freq, resp_amp, slow_pwr, card_pwr,
                      map_val, 0.0, 0.0], dtype=np.float32)
+
+    # Guard: reject windows that produce NaN features
+    if np.any(np.isnan(feat)):
+        raise ValueError(f"NaN in extracted features: {feat}")
+
+    return feat
 
 
 # ── HTTP helpers ───────────────────────────────────────────────────────────────
@@ -404,8 +430,8 @@ def extract_from_record(rec_dir: str, patient_id: int) -> tuple[list, list]:
                     label = _assign_label(float(np.nanmedian(win_icp)))
                     feats.append(feat)
                     labels.append(label)
-                except Exception:
-                    continue
+                except (ValueError, Exception):
+                    continue  # skip windows with NaN or extraction errors
 
         except Exception:
             continue
