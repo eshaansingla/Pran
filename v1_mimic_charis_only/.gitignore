@@ -1,0 +1,83 @@
+# ── AI Assistant internal ────────────────────────────────────────────────────
+.claude/
+CLAUDE.md
+.gemini/
+
+# ── Data — never commit raw or processed patient data ───────────────────────
+data/raw/
+data/processed/
+data/*.csv
+
+# ── Trained models (large binaries — use Git LFS or download separately) ────
+models/
+*.h5
+*.pkl
+*.pkl.gz
+*.ubj
+
+# ── Results (regenerable from training scripts) ─────────────────────────────
+results/
+
+# ── Literature / PDFs (copyright, not source code) ──────────────────────────
+literature/
+
+# ── Logs ────────────────────────────────────────────────────────────────────
+logs/
+*.log
+
+# ── Dev automation scripts (not part of core codebase) ──────────────────────
+auto_improve_lstm.py
+queue_lstm.py
+queue_lstm.ps1
+run_lstm_pipeline.py
+simulate_esp32_hardware.py
+
+# ── Temporary / scratch files ───────────────────────────────────────────────
+tmp/
+feature_analysis.*
+test_output.*
+test_results.*
+notes.html
+
+# ── Test CSVs (generated, not source) ───────────────────────────────────────
+test_data_*.csv
+test_*.csv
+icp-monitor-web/frontend/public/test_*.csv
+
+# ── Web app — build artifacts and dependencies ──────────────────────────────
+icp-monitor-web/frontend/node_modules/
+icp-monitor-web/frontend/dist/
+icp-monitor-web/frontend/.vite/
+icp-monitor-web/backend/__pycache__/
+npm-debug.log*
+yarn-error.log
+
+# ── Python ──────────────────────────────────────────────────────────────────
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# ── Firmware generated header (regenerable) ─────────────────────────────────
+firmware/esp32_icp_monitor/xgboost_model.h
+
+# ── IDE ─────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*.orig
+
+# ── OS ──────────────────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Secrets — NEVER commit credentials ──────────────────────────────────────
+.env
+*.env
