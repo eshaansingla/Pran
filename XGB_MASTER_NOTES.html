@@ -1,0 +1,1367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>XGBoost ICP Classifier — Master Notes</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #222536;
+    --border: #2e3250;
+    --accent: #6c8aff;
+    --accent2: #a78bfa;
+    --green: #34d399;
+    --red: #f87171;
+    --yellow: #fbbf24;
+    --cyan: #22d3ee;
+    --text: #e2e8f0;
+    --muted: #8892b0;
+    --code-bg: #141824;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    font-size: 15px;
+  }
+  /* ── NAV ── */
+  nav {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(15,17,23,0.95);
+    backdrop-filter: blur(12px);
+    border-bottom: 1px solid var(--border);
+    padding: 0 2rem;
+    display: flex; align-items: center; gap: 1.5rem;
+    flex-wrap: wrap; height: 54px;
+  }
+  nav .logo { font-weight: 700; color: var(--accent); font-size: 1rem; white-space: nowrap; }
+  nav a {
+    color: var(--muted); text-decoration: none; font-size: 0.82rem;
+    padding: 4px 8px; border-radius: 6px; transition: all 0.2s; white-space: nowrap;
+  }
+  nav a:hover { color: var(--text); background: var(--surface2); }
+  /* ── LAYOUT ── */
+  .container { max-width: 1100px; margin: 0 auto; padding: 2.5rem 1.5rem 6rem; }
+  /* ── SECTIONS ── */
+  section { margin-bottom: 3.5rem; scroll-margin-top: 70px; }
+  h1 { font-size: 2rem; font-weight: 800; color: var(--accent); margin-bottom: 0.4rem; }
+  h2 {
+    font-size: 1.3rem; font-weight: 700; color: var(--text);
+    border-left: 4px solid var(--accent); padding-left: 0.75rem;
+    margin: 2.5rem 0 1rem;
+  }
+  h3 { font-size: 1.05rem; font-weight: 600; color: var(--accent2); margin: 1.5rem 0 0.5rem; }
+  h4 { font-size: 0.95rem; font-weight: 600; color: var(--cyan); margin: 1rem 0 0.3rem; }
+  p { margin-bottom: 0.8rem; color: var(--text); }
+  ul, ol { padding-left: 1.5rem; margin-bottom: 0.8rem; }
+  li { margin-bottom: 0.3rem; }
+  /* ── HERO ── */
+  .hero {
+    background: linear-gradient(135deg, #1a1d27 0%, #1e2140 100%);
+    border: 1px solid var(--border); border-radius: 16px;
+    padding: 2.5rem; margin-bottom: 3rem;
+  }
+  .hero-subtitle { color: var(--muted); margin-top: 0.4rem; font-size: 0.95rem; }
+  .badge-row { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 1.2rem; }
+  .badge {
+    padding: 4px 12px; border-radius: 20px; font-size: 0.78rem; font-weight: 600;
+    border: 1px solid;
+  }
+  .badge-blue  { background: #1e3a8a22; border-color: var(--accent); color: var(--accent); }
+  .badge-green { background: #06402322; border-color: var(--green); color: var(--green); }
+  .badge-purple{ background: #4c1d9522; border-color: var(--accent2); color: var(--accent2); }
+  .badge-yellow{ background: #78350f22; border-color: var(--yellow); color: var(--yellow); }
+  /* ── METRICS GRID ── */
+  .metrics-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin: 1.5rem 0; }
+  .metric-card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1.2rem 1rem; text-align: center;
+  }
+  .metric-val { font-size: 2rem; font-weight: 800; color: var(--green); line-height: 1; }
+  .metric-label { font-size: 0.78rem; color: var(--muted); margin-top: 0.4rem; text-transform: uppercase; letter-spacing: 0.05em; }
+  .metric-target { font-size: 0.72rem; color: var(--accent); margin-top: 0.2rem; }
+  /* ── CARDS ── */
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1.5rem; margin-bottom: 1rem;
+  }
+  .card-title { font-weight: 700; color: var(--accent2); margin-bottom: 0.5rem; font-size: 0.95rem; }
+  /* ── CODE ── */
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border);
+    border-radius: 10px; padding: 1.2rem; overflow-x: auto;
+    font-size: 0.82rem; font-family: 'Fira Code', 'Cascadia Code', monospace;
+    margin: 1rem 0; line-height: 1.6;
+  }
+  code { font-family: 'Fira Code', 'Cascadia Code', monospace; font-size: 0.85em; }
+  .kw  { color: #c792ea; }
+  .fn  { color: #82aaff; }
+  .st  { color: #c3e88d; }
+  .cm  { color: #546e7a; font-style: italic; }
+  .nm  { color: #f78c6c; }
+  .op  { color: #89ddff; }
+  /* ── TABLES ── */
+  .table-wrap { overflow-x: auto; margin: 1rem 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+  th {
+    background: var(--surface2); color: var(--accent);
+    padding: 0.7rem 1rem; text-align: left; font-weight: 600;
+    border-bottom: 2px solid var(--border);
+  }
+  td { padding: 0.65rem 1rem; border-bottom: 1px solid var(--border); color: var(--text); }
+  tr:hover td { background: var(--surface2); }
+  .good { color: var(--green); font-weight: 600; }
+  .warn { color: var(--yellow); font-weight: 600; }
+  .bad  { color: var(--red); font-weight: 600; }
+  /* ── PIPELINE ── */
+  .pipeline {
+    display: flex; flex-wrap: wrap; gap: 0;
+    margin: 1.5rem 0; align-items: stretch;
+  }
+  .pipe-step {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 0; padding: 1rem 1.2rem; flex: 1; min-width: 120px;
+    position: relative; text-align: center;
+  }
+  .pipe-step:first-child { border-radius: 10px 0 0 10px; }
+  .pipe-step:last-child  { border-radius: 0 10px 10px 0; }
+  .pipe-step + .pipe-step { border-left: none; }
+  .pipe-step::after {
+    content: '→'; position: absolute; right: -14px; top: 50%;
+    transform: translateY(-50%); color: var(--accent); font-size: 1.2rem;
+    z-index: 1; background: var(--bg); padding: 0 2px;
+  }
+  .pipe-step:last-child::after { display: none; }
+  .pipe-num { font-size: 0.7rem; color: var(--accent); font-weight: 700; margin-bottom: 0.3rem; }
+  .pipe-name { font-size: 0.85rem; font-weight: 600; color: var(--text); }
+  .pipe-sub  { font-size: 0.72rem; color: var(--muted); margin-top: 0.2rem; }
+  /* ── CALLOUT ── */
+  .callout {
+    border-left: 4px solid; border-radius: 0 10px 10px 0;
+    padding: 1rem 1.2rem; margin: 1rem 0;
+  }
+  .callout-info  { border-color: var(--accent);  background: #6c8aff11; }
+  .callout-warn  { border-color: var(--yellow); background: #fbbf2411; }
+  .callout-good  { border-color: var(--green);  background: #34d39911; }
+  .callout-red   { border-color: var(--red);    background: #f8717111; }
+  .callout-title { font-weight: 700; margin-bottom: 0.3rem; font-size: 0.88rem; }
+  /* ── QNA ── */
+  .qna { margin: 1rem 0; }
+  details {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 10px; margin-bottom: 0.8rem; overflow: hidden;
+  }
+  details[open] { border-color: var(--accent); }
+  summary {
+    padding: 1rem 1.2rem; cursor: pointer; font-weight: 600;
+    color: var(--text); font-size: 0.92rem; list-style: none;
+    display: flex; align-items: flex-start; gap: 0.8rem;
+    user-select: none;
+  }
+  summary::-webkit-details-marker { display: none; }
+  summary::before {
+    content: '▶'; color: var(--accent); font-size: 0.75rem;
+    flex-shrink: 0; transition: transform 0.2s; margin-top: 0.2rem;
+  }
+  details[open] summary::before { transform: rotate(90deg); }
+  .q-tag {
+    background: #6c8aff22; color: var(--accent);
+    font-size: 0.7rem; padding: 2px 8px; border-radius: 10px;
+    font-weight: 700; flex-shrink: 0; margin-top: 0.1rem;
+  }
+  .answer {
+    padding: 0 1.2rem 1.2rem 2.8rem;
+    border-top: 1px solid var(--border);
+    padding-top: 1rem;
+  }
+  /* ── FEATURE BARS ── */
+  .feat-bar-wrap { display: flex; flex-direction: column; gap: 0.5rem; margin: 1rem 0; }
+  .feat-bar-row { display: flex; align-items: center; gap: 0.8rem; }
+  .feat-name { width: 200px; font-size: 0.82rem; color: var(--muted); flex-shrink: 0; font-family: monospace; }
+  .feat-bar-bg { flex: 1; background: var(--surface2); border-radius: 4px; height: 8px; overflow: hidden; }
+  .feat-bar-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+  .feat-pct { width: 45px; text-align: right; font-size: 0.82rem; color: var(--text); font-weight: 600; }
+  /* ── SPLIT DIAGRAM ── */
+  .split-diagram { display: grid; grid-template-columns: 7fr 1fr 2fr; gap: 4px; margin: 1rem 0; font-size: 0.82rem; }
+  .split-block {
+    border-radius: 8px; padding: 0.6rem 0.8rem; text-align: center; font-weight: 600;
+  }
+  .split-train { background: #1e3a8a33; border: 1px solid var(--accent); color: var(--accent); }
+  .split-val   { background: #78350f33; border: 1px solid var(--yellow); color: var(--yellow); }
+  .split-test  { background: #06402333; border: 1px solid var(--green); color: var(--green); }
+  .split-label { font-size: 0.7rem; color: var(--muted); margin-top: 0.2rem; }
+  /* ── GLOSSARY ── */
+  .glossary { display: grid; grid-template-columns: 1fr 1fr; gap: 0.6rem; }
+  @media (max-width: 650px) { .glossary { grid-template-columns: 1fr; } }
+  .gloss-item {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.7rem 1rem;
+  }
+  .gloss-term { font-weight: 700; color: var(--cyan); font-size: 0.88rem; }
+  .gloss-def  { color: var(--muted); font-size: 0.82rem; margin-top: 0.2rem; }
+  /* ── CHECKLIST ── */
+  .checklist li { list-style: none; padding-left: 0; }
+  .checklist li::before { content: '✅ '; }
+  /* ── TOC ── */
+  .toc {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1.5rem; margin-bottom: 2.5rem;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem;
+  }
+  .toc a { color: var(--muted); text-decoration: none; font-size: 0.88rem; }
+  .toc a:hover { color: var(--accent); }
+  .toc-num { color: var(--accent); font-weight: 700; margin-right: 0.4rem; font-size: 0.8rem; }
+  @media (max-width: 650px) { .toc { grid-template-columns: 1fr; } nav { gap: 0.8rem; } }
+</style>
+</head>
+<body>
+
+<nav>
+  <span class="logo">📊 XGB ICP Notes</span>
+  <a href="#overview">Overview</a>
+  <a href="#datasets">Datasets</a>
+  <a href="#pipeline">Pipeline</a>
+  <a href="#features">Features</a>
+  <a href="#model">Model</a>
+  <a href="#eval">Evaluation</a>
+  <a href="#results">Results</a>
+  <a href="#api">API</a>
+  <a href="#qna">Q&amp;A</a>
+  <a href="#glossary">Glossary</a>
+</nav>
+
+<div class="container">
+
+<!-- ── HERO ── -->
+<div class="hero">
+  <h1>XGBoost Binary ICP Classifier</h1>
+  <p class="hero-subtitle">
+    Non-Invasive Intracranial Pressure Monitoring · PhysioNet CHARIS + MIMIC-III ·
+    IEEE EMBC Capstone Project
+  </p>
+  <div class="badge-row">
+    <span class="badge badge-blue">XGBoost 2.0.3</span>
+    <span class="badge badge-green">F1 = 0.877</span>
+    <span class="badge badge-green">AUC = 0.949</span>
+    <span class="badge badge-purple">100 Patients · 448K Windows</span>
+    <span class="badge badge-yellow">Patient-Level CV · Bootstrap CI</span>
+  </div>
+</div>
+
+<!-- ── TABLE OF CONTENTS ── -->
+<div class="toc">
+  <a href="#overview"><span class="toc-num">01</span> Project Overview</a>
+  <a href="#datasets"><span class="toc-num">02</span> Datasets (CHARIS + MIMIC)</a>
+  <a href="#pipeline"><span class="toc-num">03</span> Full Data Pipeline</a>
+  <a href="#features"><span class="toc-num">04</span> Feature Engineering</a>
+  <a href="#split"><span class="toc-num">05</span> Data Split Strategy</a>
+  <a href="#model"><span class="toc-num">06</span> XGBoost Architecture</a>
+  <a href="#imbalance"><span class="toc-num">07</span> Class Imbalance Handling</a>
+  <a href="#threshold"><span class="toc-num">08</span> Threshold Selection</a>
+  <a href="#eval"><span class="toc-num">09</span> Evaluation Methodology</a>
+  <a href="#results"><span class="toc-num">10</span> Results & Metrics</a>
+  <a href="#baselines"><span class="toc-num">11</span> Baseline Comparison</a>
+  <a href="#crossdataset"><span class="toc-num">12</span> Cross-Dataset Evaluation</a>
+  <a href="#shap"><span class="toc-num">13</span> SHAP Explainability</a>
+  <a href="#api"><span class="toc-num">14</span> Backend API</a>
+  <a href="#libs"><span class="toc-num">15</span> Libraries Used</a>
+  <a href="#qna"><span class="toc-num">16</span> Hard Q&amp;A</a>
+  <a href="#glossary"><span class="toc-num">17</span> Glossary</a>
+</div>
+
+<!-- ════════════════════════════════════════ -->
+<section id="overview">
+<h2>01 · Project Overview</h2>
+
+<p>
+  Intracranial pressure (ICP) monitoring is critical in TBI, hydrocephalus, and post-operative neurosurgical
+  patients. The gold standard is invasive catheter insertion — a procedure with risk of infection, haemorrhage,
+  and limited availability in low-resource settings. This project builds a <strong>non-invasive ICP classification
+  system</strong> using optical tympanic membrane (TM) displacement sensing.
+</p>
+
+<div class="callout callout-info">
+  <div class="callout-title">🧠 Physiological Basis</div>
+  ICP transmits via the cochlear aqueduct → perilymph → round window → tympanic membrane.
+  Elevated ICP causes measurable changes in the cardiac pulsatility amplitude, respiratory modulation,
+  and slow-wave energy of the TM displacement signal — the same features extractable from
+  invasive ICP waveforms (Marchbanks 1996; Skjæret-Maroni et al., Sci Reports 2021).
+</div>
+
+<h3>Core Problem Statement</h3>
+<p>
+  <strong>Binary Classification:</strong> Given 10 seconds of physiological signals,
+  predict whether a patient's ICP is <em>Normal</em> (&lt;15 mmHg) or <em>Abnormal</em> (≥15 mmHg).
+  The 15 mmHg threshold is the clinical intervention boundary used in neurocritical care.
+</p>
+
+<h3>Why Binary (not 3-class)?</h3>
+<div class="callout callout-warn">
+  <div class="callout-title">⚠️ Design Decision</div>
+  A 3-class model (Normal / Elevated 15–20 mmHg / Critical ≥20 mmHg) was built first.
+  The Elevated class decision region collapsed — max predicted probability for Elevated was &lt;3%
+  under any input. Root cause: the 15–20 mmHg range has ambiguous waveform morphology that
+  cannot be discriminated from 6 spectral features alone. Collapsing to binary at 15 mmHg
+  produces an <strong>honest, well-calibrated model</strong> with a clinically meaningful decision boundary.
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="datasets">
+<h2>02 · Datasets</h2>
+
+<div style="display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin:1rem 0;">
+<div class="card">
+  <div class="card-title">📁 CHARIS (TBI ICU)</div>
+  <ul>
+    <li><strong>Source:</strong> PhysioNet — <code>physionet.org/content/charisdb</code></li>
+    <li><strong>Patients:</strong> 13 TBI ICU patients</li>
+    <li><strong>Signals:</strong> ICP (mmHg), ABP (mmHg), simultaneous</li>
+    <li><strong>Sampling Rate:</strong> 100–125 Hz</li>
+    <li><strong>Duration:</strong> Continuous multi-hour ICU recordings</li>
+    <li><strong>Population:</strong> Traumatic Brain Injury, adults</li>
+    <li><strong>Patient IDs used:</strong> 1–13 (assigned during extraction)</li>
+    <li><strong>Label dist:</strong> Predominantly abnormal (TBI patients)</li>
+  </ul>
+</div>
+<div class="card">
+  <div class="card-title">📁 MIMIC-III WDB (General ICU)</div>
+  <ul>
+    <li><strong>Source:</strong> PhysioNet — <code>physionet.org/content/mimic3wdb</code></li>
+    <li><strong>Patients:</strong> ~87 patients with ICP channel found</li>
+    <li><strong>Signals:</strong> ICP, ABP, and up to 30 other waveforms</li>
+    <li><strong>Access:</strong> Remote streaming via <code>wfdb</code> (no full download)</li>
+    <li><strong>Population:</strong> Mixed ICU — general, surgical, neuro</li>
+    <li><strong>Patient IDs:</strong> Real MIMIC subject_id (7-digit, e.g. 3040891)</li>
+    <li><strong>Label dist:</strong> More Normal windows (general ICU)</li>
+    <li><strong>Credentials:</strong> PhysioNet username/password via <code>.env</code></li>
+  </ul>
+</div>
+</div>
+
+<h3>Combined Dataset</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>Metric</th><th>CHARIS</th><th>MIMIC-III</th><th>Combined</th></tr>
+  <tr><td>Patients</td><td>13</td><td>~87</td><td><strong>~100</strong></td></tr>
+  <tr><td>Total Windows</td><td>~15,000</td><td>~433,000</td><td><strong>448,537</strong></td></tr>
+  <tr><td>Window Duration</td><td>10 s</td><td>10 s</td><td>10 s</td></tr>
+  <tr><td>Sampling Rate (after resampling)</td><td>125 Hz</td><td>125 Hz</td><td>125 Hz</td></tr>
+  <tr><td>Samples/Window</td><td>1,250</td><td>1,250</td><td>1,250</td></tr>
+  <tr><td>Access</td><td>Direct download</td><td>Remote streaming</td><td>—</td></tr>
+</table>
+</div>
+
+<div class="callout callout-info">
+  <div class="callout-title">📡 MIMIC Streaming Architecture</div>
+  MIMIC-III WDB has ~7,000+ records. The extraction pipeline scans record headers in parallel
+  (16 threads) over HTTP, checks for the presence of an <code>ICP</code> channel, then streams
+  only the ICP + ABP channels using <code>wfdb.rdrecord()</code>. No full waveform database
+  is downloaded — only the windows that pass quality filters are kept.
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="pipeline">
+<h2>03 · Full Data Pipeline</h2>
+
+<div class="pipeline">
+  <div class="pipe-step">
+    <div class="pipe-num">01</div>
+    <div class="pipe-name">Scan Headers</div>
+    <div class="pipe-sub">Parallel HTTP · 16 threads · find ICP channel</div>
+  </div>
+  <div class="pipe-step">
+    <div class="pipe-num">02</div>
+    <div class="pipe-name">Stream Waveform</div>
+    <div class="pipe-sub">wfdb · ICP + ABP channels only</div>
+  </div>
+  <div class="pipe-step">
+    <div class="pipe-num">03</div>
+    <div class="pipe-name">Resample</div>
+    <div class="pipe-sub">→ 125 Hz via np.interp</div>
+  </div>
+  <div class="pipe-step">
+    <div class="pipe-num">04</div>
+    <div class="pipe-name">Window QC</div>
+    <div class="pipe-sub">NaN · range · flatline checks</div>
+  </div>
+  <div class="pipe-step">
+    <div class="pipe-num">05</div>
+    <div class="pipe-name">Extract 6 Features</div>
+    <div class="pipe-sub">FFT + Wavelet per window</div>
+  </div>
+  <div class="pipe-step">
+    <div class="pipe-num">06</div>
+    <div class="pipe-name">Label</div>
+    <div class="pipe-sub">median ICP ≥15 → Abnormal</div>
+  </div>
+  <div class="pipe-step">
+    <div class="pipe-num">07</div>
+    <div class="pipe-name">Save .npy</div>
+    <div class="pipe-sub">features · labels · patient_ids</div>
+  </div>
+</div>
+
+<h3>Window Quality Control</h3>
+<p>Each 1,250-sample window passes 4 checks before feature extraction:</p>
+<pre>
+<span class="kw">def</span> <span class="fn">_is_valid_window</span>(win):
+    <span class="cm"># 1. Missing data: max 30% NaN allowed</span>
+    <span class="kw">if</span> np.isnan(win).mean() <span class="op">&gt;</span> <span class="nm">0.30</span>: <span class="kw">return False</span>
+    clean = win[~np.isnan(win)]
+    <span class="cm"># 2. Minimum valid samples after NaN removal</span>
+    <span class="kw">if</span> len(clean) <span class="op">&lt;</span> WINDOW_SAMPLES <span class="op">*</span> <span class="nm">0.5</span>: <span class="kw">return False</span>
+    <span class="cm"># 3. Physiological range: ICP must be 0–50 mmHg</span>
+    <span class="kw">if</span> np.any(clean <span class="op">&lt;</span> <span class="nm">0.0</span>) <span class="kw">or</span> np.any(clean <span class="op">&gt;</span> <span class="nm">50.0</span>): <span class="kw">return False</span>
+    <span class="cm"># 4. Flatline: std < 0.01 → sensor artifact</span>
+    <span class="kw">if</span> clean.std() <span class="op">&lt;</span> <span class="nm">0.01</span>: <span class="kw">return False</span>
+    <span class="kw">return True</span>
+</pre>
+
+<h3>Label Assignment</h3>
+<pre>
+<span class="kw">def</span> <span class="fn">_assign_label</span>(icp_median):
+    <span class="cm"># Binary: median ICP of the 10-second window</span>
+    <span class="kw">return</span> <span class="nm">0</span> <span class="kw">if</span> icp_median <span class="op">&lt;</span> <span class="nm">15.0</span> <span class="kw">else</span> <span class="nm">1</span>
+    <span class="cm"># (Original 3-class: 0=Normal, 1=Elevated 15-20, 2=Critical ≥20 — retired)</span>
+</pre>
+
+<div class="callout callout-good">
+  <div class="callout-title">✅ Why Median, Not Mean?</div>
+  ICP waveforms contain sharp spikes (cough, sneeze, position change).
+  The median is resistant to these outliers — it reflects the sustained ICP
+  level over the 10-second window rather than being pulled by transient artifacts.
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="features">
+<h2>04 · Feature Engineering</h2>
+
+<p>
+  6 features are extracted from each 10-second window. They are <strong>signal-agnostic</strong>
+  — computed identically on invasive ICP waveforms (training) and optical TM displacement
+  (hardware inference), following the established physiological equivalence in the TM-ICP literature.
+</p>
+
+<div class="table-wrap">
+<table>
+  <tr>
+    <th>#</th><th>Feature</th><th>Unit</th><th>Method</th><th>Range</th><th>Clinical Meaning</th>
+  </tr>
+  <tr>
+    <td>0</td><td><code>cardiac_amplitude</code></td><td>μm</td>
+    <td>Bandpass 1–2 Hz → 99th–1st percentile × 10</td>
+    <td>5–120</td>
+    <td>P1 percussion wave amplitude — pulsatility index proxy</td>
+  </tr>
+  <tr>
+    <td>1</td><td><code>cardiac_frequency</code></td><td>Hz</td>
+    <td>FFT dominant peak in 0.7–2.5 Hz band</td>
+    <td>0.7–2.5</td>
+    <td>Heart rate (0.7=42 bpm, 2.5=150 bpm)</td>
+  </tr>
+  <tr>
+    <td>2</td><td><code>respiratory_amplitude</code></td><td>μm</td>
+    <td>Bandpass 0.1–0.5 Hz → 99th–1st percentile × 10</td>
+    <td>1–50</td>
+    <td>B-wave / respiratory ICP modulation — compliance indicator</td>
+  </tr>
+  <tr>
+    <td>3</td><td><code>slow_wave_power</code></td><td>—</td>
+    <td>db4 wavelet level-5 approximation energy fraction</td>
+    <td>0.30–1.0</td>
+    <td>Lundberg slow-wave energy (≈ 0–1.56 Hz band); near-1 = normal</td>
+  </tr>
+  <tr>
+    <td>4</td><td><code>cardiac_power</code></td><td>—</td>
+    <td>db4 wavelet level-5 detail-1 energy fraction</td>
+    <td>0–0.40</td>
+    <td>Cardiac-band wavelet energy (≈ 1.56–3.12 Hz); compliance proxy</td>
+  </tr>
+  <tr>
+    <td>5</td><td><code>mean_arterial_pressure</code></td><td>mmHg</td>
+    <td>Mean of ABP channel, clamped 40–200 mmHg</td>
+    <td>40–200</td>
+    <td>CPP = MAP − ICP; most discriminative inter-patient feature</td>
+  </tr>
+</table>
+</div>
+
+<h3>Feature Extraction Code</h3>
+<pre>
+<span class="cm"># cardiac_amplitude: bandpass 1-2 Hz, then peak-to-peak amplitude</span>
+cb = _bandpass(win, <span class="nm">1.0</span>, <span class="nm">2.0</span>)
+cardiac_amp = (np.percentile(cb, <span class="nm">99</span>) <span class="op">-</span> np.percentile(cb, <span class="nm">1</span>)) <span class="op">*</span> <span class="nm">10.0</span>
+
+<span class="cm"># cardiac_frequency: dominant FFT peak in 0.7-2.5 Hz</span>
+fb = _bandpass(win, <span class="nm">0.7</span>, <span class="nm">2.5</span>)
+freqs = np.fft.rfftfreq(len(fb), d=<span class="nm">1.0</span><span class="op">/</span>TARGET_FS)
+power = np.abs(np.fft.rfft(fb))<span class="op">**</span><span class="nm">2</span>
+mask  = (freqs <span class="op">&gt;=</span> <span class="nm">0.7</span>) <span class="op">&amp;</span> (freqs <span class="op">&lt;=</span> <span class="nm">2.5</span>)
+cardiac_freq = freqs[mask][np.argmax(power[mask])]
+
+<span class="cm"># slow_wave_power + cardiac_power: db4 wavelet, 5 levels</span>
+coeffs   = pywt.wavedec(x100, <span class="st">"db4"</span>, level=<span class="nm">5</span>)
+energies = [np.sum(c<span class="op">**</span><span class="nm">2</span>) <span class="kw">for</span> c <span class="kw">in</span> coeffs]
+total    = sum(energies) <span class="op">+</span> <span class="nm">1e-10</span>
+slow_pwr = np.clip(energies[<span class="nm">0</span>] <span class="op">/</span> total, <span class="nm">0</span>, <span class="nm">1</span>)   <span class="cm"># approximation (cA5)</span>
+card_pwr = np.clip(energies[<span class="nm">1</span>] <span class="op">/</span> total, <span class="nm">0</span>, <span class="nm">1</span>)   <span class="cm"># detail-1 (cD5)</span>
+</pre>
+
+<h3>Bandpass Filter Implementation</h3>
+<pre>
+<span class="kw">def</span> <span class="fn">_bandpass</span>(sig, low, high, order=<span class="nm">4</span>):
+    <span class="kw">from</span> scipy.signal <span class="kw">import</span> butter, sosfiltfilt
+    nyq = TARGET_FS <span class="op">/</span> <span class="nm">2.0</span>           <span class="cm"># 62.5 Hz</span>
+    lo  = max(low <span class="op">/</span> nyq, <span class="nm">1e-4</span>)       <span class="cm"># normalise to Nyquist</span>
+    hi  = min(high <span class="op">/</span> nyq, <span class="nm">0.9999</span>)
+    sos = butter(order, [lo, hi], btype=<span class="st">"bandpass"</span>, output=<span class="st">"sos"</span>)
+    <span class="kw">return</span> sosfiltfilt(sos, sig)  <span class="cm"># zero-phase (no phase lag)</span>
+</pre>
+
+<div class="callout callout-info">
+  <div class="callout-title">🔬 Why sosfiltfilt (not lfilter)?</div>
+  <code>sosfiltfilt</code> applies the filter forward-then-backward, producing
+  <strong>zero phase distortion</strong>. This is critical for ICP waveform analysis
+  where the timing of the P1/P2/P3 peaks relative to each other encodes clinical information.
+  <code>lfilter</code> would shift peaks in time and distort amplitude ratios.
+</div>
+
+<h3>Feature Importance (Global, from XGBoost gain)</h3>
+<div class="feat-bar-wrap">
+  <div class="feat-bar-row">
+    <span class="feat-name">mean_arterial_pressure</span>
+    <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:38%;background:#6c8aff;"></div></div>
+    <span class="feat-pct">38%</span>
+  </div>
+  <div class="feat-bar-row">
+    <span class="feat-name">cardiac_amplitude</span>
+    <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:28%;background:#a78bfa;"></div></div>
+    <span class="feat-pct">28%</span>
+  </div>
+  <div class="feat-bar-row">
+    <span class="feat-name">slow_wave_power</span>
+    <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:16%;background:#22d3ee;"></div></div>
+    <span class="feat-pct">16%</span>
+  </div>
+  <div class="feat-bar-row">
+    <span class="feat-name">respiratory_amplitude</span>
+    <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:10%;background:#34d399;"></div></div>
+    <span class="feat-pct">10%</span>
+  </div>
+  <div class="feat-bar-row">
+    <span class="feat-name">cardiac_power</span>
+    <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:5%;background:#fbbf24;"></div></div>
+    <span class="feat-pct">5%</span>
+  </div>
+  <div class="feat-bar-row">
+    <span class="feat-name">cardiac_frequency</span>
+    <div class="feat-bar-bg"><div class="feat-bar-fill" style="width:3%;background:#f87171;"></div></div>
+    <span class="feat-pct">3%</span>
+  </div>
+</div>
+<p style="font-size:0.8rem;color:var(--muted);">Approximate values based on XGBoost gain importance. MAP dominates because it is the largest inter-patient discriminator (CPP = MAP − ICP). Cardiac amplitude is the primary within-patient ICP pulsatility signal.</p>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="split">
+<h2>05 · Data Split Strategy</h2>
+
+<div class="callout callout-good">
+  <div class="callout-title">✅ Why Patient-Level Splitting Matters</div>
+  A patient with 1,000 windows contributes highly correlated samples.
+  If those windows are split across train/test, the model memorises
+  that patient's physiological signature — not the general pattern.
+  Patient-level splitting ensures every window in the test set comes
+  from a patient the model has <strong>never seen</strong>.
+</div>
+
+<h3>Dataset-Stratified Split</h3>
+<p>CHARIS and MIMIC are split <strong>independently</strong>, then merged.
+This prevents one dataset from dominating the test set.</p>
+
+<div class="split-diagram">
+  <div class="split-block split-train">
+    TRAIN 70%<br/>
+    <div class="split-label">CHARIS-tr + MIMIC-tr</div>
+  </div>
+  <div class="split-block split-val">
+    VAL 10%<br/>
+    <div class="split-label">Early stopping</div>
+  </div>
+  <div class="split-block split-test">
+    TEST 20%<br/>
+    <div class="split-label">Final evaluation</div>
+  </div>
+</div>
+
+<h3>Implementation (GroupShuffleSplit)</h3>
+<pre>
+<span class="kw">def</span> <span class="fn">_split_cohort</span>(X, y, pid):
+    <span class="cm"># Step 1: 80% train+val, 20% test — by patient</span>
+    gss1 = GroupShuffleSplit(<span class="nm">1</span>, test_size=<span class="nm">0.20</span>, random_state=<span class="nm">42</span>)
+    tv, te = next(gss1.split(X, y, groups=pid))
+
+    <span class="cm"># Step 2: split train+val → 87.5% train, 12.5% val → 10% of total</span>
+    gss2 = GroupShuffleSplit(<span class="nm">1</span>, test_size=<span class="nm">0.125</span>, random_state=<span class="nm">42</span>)
+    tr, va = next(gss2.split(X[tv], y[tv], groups=pid[tv]))
+    <span class="kw">return</span> tv[tr], tv[va], te
+
+<span class="cm"># Split each cohort separately</span>
+ch_tr, ch_va, ch_te = _split_cohort(X[ch], y[ch], pid[ch])  <span class="cm"># CHARIS (pid ≤ 13)</span>
+mi_tr, mi_va, mi_te = _split_cohort(X[mi], y[mi], pid[mi])  <span class="cm"># MIMIC (pid > 13)</span>
+
+<span class="cm"># Merge — guarantees both cohorts appear in all three splits</span>
+tr = np.concatenate([ch_idx[ch_tr], mi_idx[mi_tr]])
+va = np.concatenate([ch_idx[ch_va], mi_idx[mi_va]])
+te = np.concatenate([ch_idx[ch_te], mi_idx[mi_te]])
+</pre>
+
+<div class="callout callout-warn">
+  <div class="callout-title">⚠️ Early-Stopping Val: CHARIS-only subset</div>
+  During training, the early-stopping validation set uses only CHARIS windows from the val split.
+  CHARIS has more balanced ICP distributions and less noise — this produces a cleaner AUC signal
+  for early stopping. The full val set (CHARIS + MIMIC) is used for threshold optimisation.
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="model">
+<h2>06 · XGBoost Model Architecture</h2>
+
+<h3>Algorithm: Gradient Boosted Trees</h3>
+<p>
+  XGBoost builds an ensemble of decision trees sequentially. Each tree corrects the errors of the
+  previous trees by fitting the <strong>negative gradient of the loss function</strong>
+  (logistic loss for binary classification). The final output is a weighted sum of all trees
+  passed through a sigmoid to produce P(Abnormal).
+</p>
+
+<h3>Full Hyperparameter Set</h3>
+<pre>
+params = {
+    <span class="st">"objective"</span>:        <span class="st">"binary:logistic"</span>,   <span class="cm"># sigmoid output → P(Abnormal)</span>
+    <span class="st">"eval_metric"</span>:      <span class="st">"auc"</span>,               <span class="cm"># monitor AUC on val set</span>
+    <span class="st">"eta"</span>:              <span class="nm">0.1</span>,                  <span class="cm"># learning rate — shrinks each tree</span>
+    <span class="st">"max_depth"</span>:        <span class="nm">4</span>,                    <span class="cm"># tree depth — controls complexity</span>
+    <span class="st">"min_child_weight"</span>: <span class="nm">5</span>,                    <span class="cm"># min sum of hessian in leaf — prevents small splits</span>
+    <span class="st">"subsample"</span>:        <span class="nm">0.8</span>,                  <span class="cm"># 80% of rows per tree — reduces variance</span>
+    <span class="st">"colsample_bytree"</span>: <span class="nm">0.8</span>,                  <span class="cm"># 80% of features per tree — like RF</span>
+    <span class="st">"scale_pos_weight"</span>: spw,                  <span class="cm"># = n_normal / n_abnormal (handles imbalance)</span>
+    <span class="st">"lambda"</span>:           <span class="nm">1.0</span>,                  <span class="cm"># L2 regularisation on leaf weights</span>
+    <span class="st">"alpha"</span>:            <span class="nm">0.1</span>,                  <span class="cm"># L1 regularisation — sparsity</span>
+    <span class="st">"seed"</span>:             <span class="nm">42</span>,                   <span class="cm"># reproducibility</span>
+    <span class="st">"tree_method"</span>:      <span class="st">"hist"</span>,              <span class="cm"># histogram-based — fast on large datasets</span>
+}
+
+bst = xgb.train(
+    params, dtrain,
+    num_boost_round=<span class="nm">500</span>,            <span class="cm"># max 500 trees</span>
+    evals=[(dtrain,<span class="st">"train"</span>), (dval,<span class="st">"val"</span>)],
+    early_stopping_rounds=<span class="nm">30</span>,       <span class="cm"># stop if val AUC doesn't improve for 30 rounds</span>
+    verbose_eval=<span class="nm">50</span>,
+)
+<span class="cm"># Best model: ~420 trees (best_iteration ≈ 420)</span>
+</pre>
+
+<h3>Hyperparameter Rationale</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>Parameter</th><th>Value</th><th>Why This Value</th></tr>
+  <tr><td>max_depth</td><td>4</td><td>Shallow trees generalise better; 6 features don't need deep splits. Depth 4 = max 16 leaves = complex enough for non-linear boundaries.</td></tr>
+  <tr><td>eta (lr)</td><td>0.1</td><td>Standard. Lower lr + more rounds improves generalisation but slow. 0.1 with early-stopping is optimal balance.</td></tr>
+  <tr><td>min_child_weight</td><td>5</td><td>Each leaf must cover ≥5 training samples. With 400K+ windows, prevents overfitting to outliers.</td></tr>
+  <tr><td>subsample</td><td>0.8</td><td>Stochastic gradient boosting — each tree sees 80% of data. Reduces variance, prevents overfitting.</td></tr>
+  <tr><td>colsample_bytree</td><td>0.8</td><td>Each tree uses 80% of 6 features = 4–5 features. Adds diversity, like Random Forest bagging.</td></tr>
+  <tr><td>lambda (L2)</td><td>1.0</td><td>Default. Prevents very large leaf weights.</td></tr>
+  <tr><td>alpha (L1)</td><td>0.1</td><td>Light sparsity — effectively zero-out near-zero leaf weights.</td></tr>
+  <tr><td>tree_method</td><td>hist</td><td>Approximate histogram-based split finding — O(n) vs O(n log n). Essential for 400K+ windows.</td></tr>
+</table>
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="imbalance">
+<h2>07 · Class Imbalance Handling</h2>
+
+<p>
+  MIMIC-III contains predominantly Normal ICP windows (general ICU patients don't all have elevated ICP).
+  Without correction, the model would learn to predict "Normal" for everything and achieve high accuracy
+  while being clinically useless.
+</p>
+
+<h3>scale_pos_weight</h3>
+<pre>
+n0 = (y_tr == <span class="nm">0</span>).sum()   <span class="cm"># count Normal windows in training set</span>
+n1 = (y_tr == <span class="nm">1</span>).sum()   <span class="cm"># count Abnormal windows</span>
+spw = n0 <span class="op">/</span> n1             <span class="cm"># e.g. 0.48 if 68% Normal, 32% Abnormal</span>
+<span class="cm"># XGBoost multiplies the gradient of positive class by spw</span>
+<span class="cm"># → model penalises missing Abnormal cases more than missing Normal</span>
+</pre>
+
+<div class="callout callout-info">
+  <div class="callout-title">📐 Mathematical Effect of scale_pos_weight</div>
+  In binary logistic loss: <code>L = -[y·log(p) + (1-y)·log(1-p)]</code><br/>
+  With scale_pos_weight = w: <code>L = -[w·y·log(p) + (1-y)·log(1-p)]</code><br/>
+  This is equivalent to oversampling the positive class by factor w, but computationally
+  more efficient — no actual resampling occurs.
+</div>
+
+<h3>Why Not SMOTE or Oversampling?</h3>
+<p>
+  SMOTE creates synthetic windows by interpolating between real windows.
+  For physiological time-series features, synthetic ICP windows may not correspond
+  to any real physiological state — potentially teaching the model nonsensical patterns.
+  <code>scale_pos_weight</code> modifies the loss directly without data fabrication.
+</p>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="threshold">
+<h2>08 · Threshold Selection</h2>
+
+<p>
+  XGBoost outputs P(Abnormal) ∈ [0, 1]. The threshold τ converts this to a binary decision.
+  Default τ=0.5 is suboptimal for clinical use — we want high recall (don't miss abnormal cases).
+</p>
+
+<h3>Youden's J Statistic</h3>
+<pre>
+<span class="cm"># Compute ROC curve on validation set</span>
+fpr, tpr, thresholds = roc_curve(y_va, val_probs)
+
+<span class="cm"># Youden's J = TPR - FPR = Sensitivity + Specificity - 1</span>
+<span class="cm"># Maximising J gives the threshold that best balances sensitivity and specificity</span>
+j_idx = np.argmax(tpr - fpr)
+threshold_youden = thresholds[j_idx]
+
+<span class="cm"># Clinical override: also find best F1 where Recall ≥ 0.75</span>
+<span class="cm"># (Missing abnormal ICP is more dangerous than false alarms)</span>
+<span class="kw">for</span> t <span class="kw">in</span> np.linspace(<span class="nm">0.1</span>, <span class="nm">0.9</span>, <span class="nm">161</span>):
+    preds = (val_probs >= t).astype(int)
+    f = f1_score(y_va, preds)
+    r = recall_score(y_va, preds)
+    <span class="kw">if</span> r >= <span class="nm">0.75</span> <span class="kw">and</span> f > best_f1:
+        best_f1, threshold = f, t   <span class="cm"># selected threshold</span>
+</pre>
+
+<div class="callout callout-warn">
+  <div class="callout-title">⚠️ Important: Threshold on Val, Applied to Test</div>
+  The threshold is found on the <strong>validation set only</strong>.
+  It is then applied to the <strong>test set</strong> — the test set never influences
+  any decision during training or threshold selection. This preserves test set integrity.
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="eval">
+<h2>09 · Evaluation Methodology</h2>
+
+<h3>Metrics Reported</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>Metric</th><th>Formula</th><th>Clinical Meaning</th></tr>
+  <tr><td>F1-score</td><td>2·(Prec·Rec)/(Prec+Rec)</td><td>Balance between catching abnormal cases and avoiding false alarms</td></tr>
+  <tr><td>AUC-ROC</td><td>Area under ROC curve</td><td>Threshold-independent discrimination ability</td></tr>
+  <tr><td>Precision</td><td>TP/(TP+FP)</td><td>Of cases flagged as abnormal, how many really are?</td></tr>
+  <tr><td>Recall (Sensitivity)</td><td>TP/(TP+FN)</td><td>Of truly abnormal cases, how many did we catch? (Critical — FN = missed patient)</td></tr>
+  <tr><td>Specificity</td><td>TN/(TN+FP)</td><td>Of truly normal cases, how many correctly identified?</td></tr>
+  <tr><td>Balanced Accuracy</td><td>(Sens+Spec)/2</td><td>Average accuracy across both classes — handles imbalance</td></tr>
+  <tr><td>ECE</td><td>Σ |conf−acc| per bin</td><td>Calibration quality — are predicted probabilities trustworthy?</td></tr>
+</table>
+</div>
+
+<h3>5-Fold Grouped Cross-Validation</h3>
+<pre>
+<span class="kw">from</span> sklearn.model_selection <span class="kw">import</span> GroupKFold
+gkf = GroupKFold(n_splits=<span class="nm">5</span>)
+
+<span class="cm"># Groups = patient IDs → no patient spans train and test within any fold</span>
+<span class="kw">for</span> fold, (tr_idx, te_idx) <span class="kw">in</span> enumerate(gkf.split(X, y, groups=pid)):
+    <span class="cm"># train fresh XGBoost model on this fold's training data</span>
+    <span class="cm"># evaluate on held-out fold</span>
+    <span class="cm"># record F1, AUC, Precision, Recall, BalancedAcc</span>
+
+<span class="cm"># Report: mean ± std across 5 folds</span>
+<span class="cm"># This estimates how performance would vary with a different random patient split</span>
+</pre>
+
+<h3>Patient-Level Bootstrap Confidence Intervals</h3>
+<pre>
+<span class="kw">def</span> <span class="fn">bootstrap_ci</span>(y_true, y_pred, y_prob, pid, n_boot=<span class="nm">1000</span>):
+    unique_pids = np.unique(pid)
+    <span class="kw">for</span> _ <span class="kw">in</span> range(n_boot):
+        <span class="cm"># Resample PATIENTS with replacement (not windows)</span>
+        sampled = rng.choice(unique_pids, size=len(unique_pids), replace=<span class="kw">True</span>)
+        <span class="cm"># Pool all windows belonging to sampled patients</span>
+        idx = np.concatenate([np.where(pid==p)[0] <span class="kw">for</span> p <span class="kw">in</span> sampled])
+        <span class="cm"># Compute metrics on pooled windows</span>
+        boot_f1.append(f1_score(y_true[idx], y_pred[idx]))
+        boot_auc.append(roc_auc_score(y_true[idx], y_prob[idx]))
+    <span class="cm"># 95% CI = [2.5th percentile, 97.5th percentile] across 1000 iterations</span>
+</pre>
+
+<div class="callout callout-info">
+  <div class="callout-title">🔑 Why Patient-Level Bootstrap?</div>
+  Windows from the same patient are correlated (same physiology). If you resample
+  individual windows, the same patient appears in nearly every bootstrap sample →
+  CIs are artificially narrow by 3–5×. Patient-level resampling respects the
+  true unit of analysis and produces honest, wider confidence intervals.
+</div>
+
+<h3>Expected Calibration Error (ECE)</h3>
+<pre>
+<span class="kw">def</span> <span class="fn">_ece</span>(y_true, probs, n_bins=<span class="nm">10</span>):
+    bin_edges = np.linspace(<span class="nm">0.0</span>, <span class="nm">1.0</span>, n_bins <span class="op">+</span> <span class="nm">1</span>)
+    ece = <span class="nm">0.0</span>
+    <span class="kw">for</span> lo, hi <span class="kw">in</span> zip(bin_edges[:<span class="op">-</span><span class="nm">1</span>], bin_edges[<span class="nm">1</span>:]):
+        mask = (probs >= lo) <span class="op">&amp;</span> (probs < hi)
+        <span class="kw">if not</span> mask.any(): <span class="kw">continue</span>
+        <span class="cm"># In a perfect model: mean predicted prob = fraction of positives in bin</span>
+        ece += (mask.sum() <span class="op">/</span> n) <span class="op">*</span> abs(probs[mask].mean() <span class="op">-</span> y_true[mask].mean())
+    <span class="kw">return</span> ece  <span class="cm"># ECE = 0 → perfect calibration</span>
+</pre>
+
+<h3>Overfitting Detection</h3>
+<pre>
+gap = f1_train - f1_test
+<span class="cm"># gap < 0.08 → OK (model generalises)</span>
+<span class="cm"># gap > 0.08 → OVERFIT (model memorised training data)</span>
+</pre>
+
+<h3>Learning Curves Generated</h3>
+<ul>
+  <li><strong>F1 vs Training Data Fraction</strong> (10%, 20%, 30%, 50%, 70%, 100%) — shows whether more data helps</li>
+  <li><strong>AUC vs Boosting Rounds</strong> (train + val) — shows convergence and where early stopping triggers</li>
+</ul>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="results">
+<h2>10 · Results & Metrics</h2>
+
+<div class="metrics-grid">
+  <div class="metric-card">
+    <div class="metric-val">0.877</div>
+    <div class="metric-label">F1-Score</div>
+    <div class="metric-target">Target ≥ 0.80 ✅</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-val">0.949</div>
+    <div class="metric-label">AUC-ROC</div>
+    <div class="metric-target">Target ≥ 0.90 ✅</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-val">0.944</div>
+    <div class="metric-label">Precision</div>
+    <div class="metric-target">High specificity</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-val">0.819</div>
+    <div class="metric-label">Recall</div>
+    <div class="metric-target">Target ≥ 0.75 ✅</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-val">0.951</div>
+    <div class="metric-label">Specificity</div>
+    <div class="metric-target">Low false alarm rate</div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-val">0.885</div>
+    <div class="metric-label">Balanced Acc.</div>
+    <div class="metric-target">Imbalance-robust</div>
+  </div>
+</div>
+
+<h3>Confusion Matrix Interpretation</h3>
+<div class="table-wrap">
+<table>
+  <tr><th></th><th>Predicted Normal</th><th>Predicted Abnormal</th></tr>
+  <tr><td><strong>True Normal</strong></td><td class="good">TN — Correct</td><td class="warn">FP — False Alarm (patient is fine, monitor alarmed)</td></tr>
+  <tr><td><strong>True Abnormal</strong></td><td class="bad">FN — Missed! (patient deteriorating, no alert)</td><td class="good">TP — Correct Alert</td></tr>
+</table>
+</div>
+
+<div class="callout callout-red">
+  <div class="callout-title">🏥 Clinical Priority: Minimise FN</div>
+  A False Negative means a patient with elevated ICP was not flagged.
+  ICP > 20 mmHg for &gt;5 minutes causes secondary brain injury.
+  This is why Recall ≥ 0.75 was used as a hard constraint in threshold selection —
+  we tolerate more false alarms rather than miss deteriorating patients.
+</div>
+
+<h3>5-Fold CV Summary</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>Metric</th><th>Mean</th><th>± Std</th><th>Interpretation</th></tr>
+  <tr><td>F1-score</td><td>~0.87</td><td>~0.03</td><td class="good">Low variance — model is stable across splits</td></tr>
+  <tr><td>AUC</td><td>~0.94</td><td>~0.02</td><td class="good">Consistent discrimination across all patient subsets</td></tr>
+  <tr><td>Precision</td><td>~0.93</td><td>~0.04</td><td class="good">High — few false alarms</td></tr>
+  <tr><td>Recall</td><td>~0.82</td><td>~0.05</td><td class="good">Above clinical 0.75 threshold</td></tr>
+</table>
+</div>
+
+<h3>95% Confidence Intervals (Patient-Level Bootstrap)</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>Metric</th><th>Estimate</th><th>95% CI</th></tr>
+  <tr><td>F1</td><td>0.877</td><td>[0.84, 0.91]</td></tr>
+  <tr><td>AUC</td><td>0.949</td><td>[0.93, 0.97]</td></tr>
+  <tr><td>Precision</td><td>0.944</td><td>[0.91, 0.97]</td></tr>
+  <tr><td>Recall</td><td>0.819</td><td>[0.77, 0.87]</td></tr>
+</table>
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="baselines">
+<h2>11 · Baseline Comparison</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Model</th><th>F1</th><th>AUC</th><th>Precision</th><th>Recall</th><th>Bal. Acc</th><th>McNemar p</th></tr>
+  <tr>
+    <td>Logistic Regression</td>
+    <td>~0.71</td><td>~0.82</td><td>~0.75</td><td>~0.68</td><td>~0.76</td>
+    <td class="good">&lt;0.001 ✅</td>
+  </tr>
+  <tr>
+    <td>Random Forest (100)</td>
+    <td>~0.84</td><td>~0.93</td><td>~0.88</td><td>~0.80</td><td>~0.86</td>
+    <td class="good">&lt;0.05 ✅</td>
+  </tr>
+  <tr>
+    <td>SVM RBF (n=20K)</td>
+    <td>~0.78</td><td>~0.88</td><td>~0.81</td><td>~0.75</td><td>~0.82</td>
+    <td class="good">&lt;0.01 ✅</td>
+  </tr>
+  <tr>
+    <td>Cardiac Amp Threshold</td>
+    <td>~0.55</td><td>~0.68</td><td>~0.60</td><td>~0.52</td><td>~0.63</td>
+    <td class="good">&lt;0.001 ✅</td>
+  </tr>
+  <tr style="background:#1e3a8a22;">
+    <td><strong>XGBoost (ours) ★</strong></td>
+    <td class="good"><strong>0.877</strong></td>
+    <td class="good"><strong>0.949</strong></td>
+    <td class="good"><strong>0.944</strong></td>
+    <td class="good"><strong>0.819</strong></td>
+    <td class="good"><strong>0.885</strong></td>
+    <td>—</td>
+  </tr>
+</table>
+</div>
+
+<p style="font-size:0.8rem;color:var(--muted);">McNemar's test (χ² with continuity correction, df=1): p&lt;0.05 indicates XGBoost makes significantly fewer errors than the baseline. All baselines use identical patient-level train/test split. SVM subsampled to 20K training samples for computational feasibility.</p>
+
+<div class="callout callout-info">
+  <div class="callout-title">📌 Why Random Forest is the Strongest Baseline</div>
+  RF also builds decision trees with bagging — fundamentally similar to XGBoost.
+  The XGBoost advantage: <strong>sequential boosting</strong> focuses on hard examples
+  (misclassified windows near the decision boundary), while RF trees are independent.
+  The &gt;3% F1 improvement of XGBoost over RF is statistically significant (McNemar p&lt;0.05).
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="crossdataset">
+<h2>12 · Cross-Dataset Generalisation</h2>
+
+<p>
+  <code>cross_dataset_eval.py</code> runs a stricter test:
+  <strong>train on CHARIS only (13 patients), test on all MIMIC patients</strong>.
+  This is true out-of-distribution evaluation — the model has never seen MIMIC data.
+</p>
+
+<pre>
+<span class="cm"># Train: CHARIS (TBI ICU patients)</span>
+<span class="cm"># Val:   held-out CHARIS patients (early stopping only)</span>
+<span class="cm"># Test:  ALL MIMIC patients (general ICU — never seen)</span>
+
+gss = GroupShuffleSplit(n_splits=<span class="nm">1</span>, test_size=<span class="nm">0.20</span>, random_state=<span class="nm">42</span>)
+tr_idx, val_idx = next(gss.split(ch_feat, ch_lab, groups=ch_pid))
+
+X_train, X_val = ch_feat[tr_idx], ch_feat[val_idx]
+X_test = mi_feat   <span class="cm"># all MIMIC — never seen during training</span>
+</pre>
+
+<div class="callout callout-info">
+  <div class="callout-title">🌐 Why This Matters</div>
+  The combined training result (CHARIS+MIMIC trained, tested on 20% held-out of both)
+  tells you how well the model works on <em>similar</em> data.
+  The cross-dataset result tells you if the learned ICP physiology features
+  <strong>generalise across hospital settings</strong> — a prerequisite for real-world deployment.
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="shap">
+<h2>13 · SHAP Explainability</h2>
+
+<p>
+  SHAP (SHapley Additive exPlanations) decomposes each individual prediction into
+  per-feature contributions. For a window predicted as Abnormal, SHAP explains
+  <em>which features pushed the prediction above the threshold and by how much</em>.
+</p>
+
+<pre>
+<span class="cm"># XGBoost native SHAP (tree SHAP — exact, not approximate)</span>
+contribs = bst.predict(dm, pred_contribs=<span class="kw">True</span>)  <span class="cm"># (N, n_features + 1)</span>
+<span class="cm"># contribs[i] = [shap_f0, shap_f1, ..., shap_f5, bias_term]</span>
+<span class="cm"># Sum = log-odds of prediction; sigmoid(sum) = P(Abnormal)</span>
+
+shap_vals = contribs[<span class="nm">0</span>][:<span class="nm">6</span>]   <span class="cm"># per-feature contributions for window 0</span>
+<span class="cm"># Positive SHAP → feature pushed toward Abnormal</span>
+<span class="cm"># Negative SHAP → feature pushed toward Normal</span>
+</pre>
+
+<div class="callout callout-good">
+  <div class="callout-title">🏥 Clinical Use of SHAP</div>
+  Instead of a black-box "Abnormal: 87%" output, the clinician sees:
+  <em>"High MAP (+0.42), elevated cardiac amplitude (+0.31) drove this Abnormal prediction.
+  Slow wave power was normal (−0.08)."</em>
+  This enables clinical trust and error checking — if the top SHAP feature
+  is a known artifact for that patient, the clinician can discount the alert.
+</div>
+
+<h3>Backend SHAP Implementation</h3>
+<pre>
+<span class="cm"># In model_loader.py — per-prediction SHAP via XGBoost native method</span>
+top3_idx  = abs_shap.argsort()[::<span class="op">-</span><span class="nm">1</span>][:<span class="nm">3</span>]
+top_features = [{
+    <span class="st">"name"</span>:       FEATURE_NAMES[i],
+    <span class="st">"value"</span>:      round(float(val), <span class="nm">3</span>),
+    <span class="st">"status"</span>:     <span class="st">"HIGH"</span> <span class="kw">if</span> z > <span class="nm">0.33</span> <span class="kw">else</span> <span class="st">"LOW"</span> <span class="kw">if</span> z < <span class="op">-</span><span class="nm">0.33</span> <span class="kw">else</span> <span class="st">"NORMAL"</span>,
+    <span class="st">"shap"</span>:       round(float(shap_vals[i]), <span class="nm">4</span>),
+    <span class="st">"impact_pct"</span>: round(abs_shap[i] <span class="op">/</span> abs_shap.sum() <span class="op">*</span> <span class="nm">100</span>, <span class="nm">1</span>),
+} <span class="kw">for</span> i <span class="kw">in</span> top3_idx]
+</pre>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="api">
+<h2>14 · Backend API (FastAPI)</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Endpoint</th><th>Method</th><th>Input</th><th>Output</th></tr>
+  <tr><td><code>/api/predict</code></td><td>POST</td><td>JSON: 6 feature values</td><td>class, probability, SHAP top-3 features</td></tr>
+  <tr><td><code>/api/predict_batch</code></td><td>POST</td><td>CSV file upload</td><td>per-window predictions + session summary</td></tr>
+  <tr><td><code>/api/model_info</code></td><td>GET</td><td>—</td><td>hyperparameters, metrics, feature ranges</td></tr>
+  <tr><td><code>/api/health</code></td><td>GET</td><td>—</td><td>status + timestamp</td></tr>
+  <tr><td><code>/api/example_csv</code></td><td>GET</td><td>—</td><td>sample CSV for testing</td></tr>
+</table>
+</div>
+
+<h3>Inference Flow (Single Window)</h3>
+<div class="pipeline">
+  <div class="pipe-step">
+    <div class="pipe-num">1</div>
+    <div class="pipe-name">Pydantic Validate</div>
+    <div class="pipe-sub">6 features, correct types</div>
+  </div>
+  <div class="pipe-step">
+    <div class="pipe-num">2</div>
+    <div class="pipe-name">Range Check</div>
+    <div class="pipe-sub">config.py FEATURE_RANGES</div>
+  </div>
+  <div class="pipe-step">
+    <div class="pipe-num">3</div>
+    <div class="pipe-name">DMatrix</div>
+    <div class="pipe-sub">XGBoost input format</div>
+  </div>
+  <div class="pipe-step">
+    <div class="pipe-num">4</div>
+    <div class="pipe-name">XGBoost Predict</div>
+    <div class="pipe-sub">P(Abnormal) ∈ [0,1]</div>
+  </div>
+  <div class="pipe-step">
+    <div class="pipe-num">5</div>
+    <div class="pipe-name">Threshold Apply</div>
+    <div class="pipe-sub">P ≥ τ → Abnormal</div>
+  </div>
+  <div class="pipe-step">
+    <div class="pipe-num">6</div>
+    <div class="pipe-name">SHAP Contrib</div>
+    <div class="pipe-sub">Top-3 feature explanations</div>
+  </div>
+</div>
+
+<h3>Model Artefacts</h3>
+<div class="table-wrap">
+<table>
+  <tr><th>File</th><th>Contents</th><th>Size</th></tr>
+  <tr><td><code>models/xgboost_binary.pkl.gz</code></td><td>Trained XGBoost Booster (gzip compressed)</td><td>&lt;512 KB</td></tr>
+  <tr><td><code>models/xgboost_binary_calibrator.pkl.gz</code></td><td>IsotonicRegression calibrator (or None)</td><td>~5 KB</td></tr>
+  <tr><td><code>models/binary_meta.json</code></td><td>All metrics, CV results, CIs, hyperparams, training date</td><td>~3 KB</td></tr>
+</table>
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="libs">
+<h2>15 · Libraries Used</h2>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Library</th><th>Version</th><th>Used For</th><th>Direct / Indirect</th></tr>
+  <tr><td>xgboost</td><td>2.0.3</td><td>Model training, inference, SHAP contributions</td><td>Direct</td></tr>
+  <tr><td>scikit-learn</td><td>≥1.2.0</td><td>GroupShuffleSplit, GroupKFold, IsotonicRegression, metrics, calibration_curve</td><td>Direct</td></tr>
+  <tr><td>numpy</td><td>1.26.4</td><td>Array ops, FFT, resampling, window extraction</td><td>Direct</td></tr>
+  <tr><td>scipy</td><td>≥1.10.0</td><td>Butterworth bandpass filter (butter, sosfiltfilt)</td><td>Direct</td></tr>
+  <tr><td>PyWavelets (pywt)</td><td>≥1.4.0</td><td>db4 wavelet decomposition (slow_wave_power, cardiac_power)</td><td>Direct</td></tr>
+  <tr><td>wfdb</td><td>≥4.0.0</td><td>PhysioNet waveform reading (rdrecord, rdheader) for MIMIC streaming</td><td>Direct</td></tr>
+  <tr><td>pandas</td><td>≥2.0.0</td><td>CSV parsing in backend validation</td><td>Direct</td></tr>
+  <tr><td>fastapi</td><td>0.111.0</td><td>REST API backend</td><td>Direct</td></tr>
+  <tr><td>pydantic</td><td>2.7.1</td><td>Request validation (field_validator, BaseModel)</td><td>Direct (via FastAPI)</td></tr>
+  <tr><td>uvicorn</td><td>0.29.0</td><td>ASGI server for FastAPI</td><td>Indirect (FastAPI runtime)</td></tr>
+  <tr><td>matplotlib</td><td>≥3.7.0</td><td>ROC curve, confusion matrix, calibration plots, learning curves</td><td>Direct</td></tr>
+  <tr><td>seaborn</td><td>≥0.12.0</td><td>Confusion matrix heatmap</td><td>Direct</td></tr>
+  <tr><td>shap</td><td>≥0.42.0</td><td>Imported in requirements (XGBoost native SHAP used in inference)</td><td>Indirect</td></tr>
+  <tr><td>python-dotenv</td><td>≥1.0.0</td><td>Load PhysioNet credentials from .env file</td><td>Direct</td></tr>
+  <tr><td>requests</td><td>(stdlib-compatible)</td><td>HTTP requests to PhysioNet MIMIC-III WDB</td><td>Direct</td></tr>
+  <tr><td>scipy.stats.chi2</td><td>via scipy</td><td>McNemar's test for statistical significance</td><td>Direct</td></tr>
+</table>
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="qna">
+<h2>16 · Hard Q&amp;A</h2>
+<div class="qna">
+
+  <details>
+    <summary><span class="q-tag">HARD</span> Why XGBoost and not a neural network for this task?</summary>
+    <div class="answer">
+      <p>Three reasons rooted in the data and problem structure:</p>
+      <ol>
+        <li><strong>Tabular features, not raw waveforms:</strong> We extract 6 engineered features per window, not raw 1,250-sample waveforms. XGBoost is empirically stronger than MLPs on tabular data with &lt;100 features (Grinsztajn et al., NeurIPS 2022). The features already encode the temporal structure.</li>
+        <li><strong>Interpretability requirement:</strong> Clinical decision support systems need explainability. XGBoost provides exact SHAP values via tree SHAP (Lundberg &amp; Lee, NeurIPS 2017). Neural networks require approximate SHAP which is computationally expensive and less reliable for tree-structured decision boundaries.</li>
+        <li><strong>Data size efficiency:</strong> XGBoost converges reliably with 100 patients. Deep networks for tabular data tend to overfit or underfit with &lt;1M samples unless heavily regularised.</li>
+      </ol>
+      <p>The LSTM is used separately for <em>forecasting</em> (temporal sequence → future state), where the sequential structure of raw sequences matters. Classification of individual windows → XGBoost. Trend forecasting over sequences → LSTM.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="q-tag">HARD</span> How does GroupShuffleSplit differ from StratifiedKFold, and why does it matter here?</summary>
+    <div class="answer">
+      <p><strong>StratifiedKFold</strong> stratifies by class distribution but operates on individual samples — it can put window 500 from Patient A in training and window 501 from Patient A in the test set. For time-series physiological data, this causes data leakage: the model sees the patient's physiological baseline in training and is then tested on data from the same baseline.</p>
+      <p><strong>GroupShuffleSplit</strong> with <code>groups=patient_id</code> enforces that all windows from a given patient go to either train OR test — never both. The "shuffle" means groups are randomly assigned to splits. The "group" guarantee means no intra-patient leakage.</p>
+      <p>In our case, a single patient can have 5,000+ windows. Without group-based splitting, the model would achieve inflated metrics by memorising per-patient physiological signatures rather than learning generalizable ICP patterns. Our cross-dataset eval (CHARIS → MIMIC) further validates that the patterns generalise to unseen patients from a different hospital.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="q-tag">HARD</span> Why was the threshold not set at 0.5? What is Youden's J and when does it fail?</summary>
+    <div class="answer">
+      <p>P=0.5 is the optimal threshold only when the cost of a False Positive equals the cost of a False Negative AND the class distribution is balanced. Both conditions fail here:</p>
+      <ul>
+        <li><strong>Asymmetric costs:</strong> A False Negative (missed Abnormal ICP) means a deteriorating patient goes unmonitored. A False Positive (false alarm) wastes clinical time but doesn't harm the patient. FN is more costly.</li>
+        <li><strong>Class imbalance:</strong> More Normal windows → model is biased toward Normal → default 0.5 threshold misses abnormal cases.</li>
+      </ul>
+      <p><strong>Youden's J = max(TPR - FPR)</strong> is equivalent to maximising <code>Sensitivity + Specificity - 1</code>. It finds the threshold that best separates the two classes in ROC space.</p>
+      <p><strong>When Youden's J fails:</strong> If the clinical cost ratio is extreme (e.g., FN is 100× worse than FP), you should use the threshold that achieves a minimum required recall (sensitivity), not the one that maximises balanced accuracy. That is why we add the constraint: find the best F1 threshold WHERE recall ≥ 0.75. Youden's J is used only as a fallback if no threshold achieves recall ≥ 0.75.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="q-tag">HARD</span> What is Expected Calibration Error and why is a well-calibrated model important clinically?</summary>
+    <div class="answer">
+      <p>A model is <strong>calibrated</strong> if P(Abnormal) = 0.80 means that, among all windows where the model outputs 0.80, approximately 80% are truly Abnormal. A miscalibrated model might output 0.80 for windows where only 60% are Abnormal — the probability is meaningless.</p>
+      <p><strong>ECE formula:</strong> Divide [0,1] into n bins. For each bin, compute |mean predicted probability − fraction of true positives|, weighted by how many samples fall in that bin. ECE = 0 is perfect; ECE = 0.1 means predictions are off by 10% on average.</p>
+      <p><strong>Clinical importance:</strong> Physicians don't just need a binary alert — they need to know how confident the model is to triage multiple patients. If the model says P=0.95 for Patient A and P=0.62 for Patient B, a well-calibrated model means "check Patient A first." If the model is miscalibrated, the probability is untrustworthy for prioritisation.</p>
+      <p>In our pipeline, we measured ECE before and after isotonic calibration. The current model uses raw probabilities (calibration was found to squish probabilities and reduce recall — raw probs were better calibrated than the calibrated version on this dataset).</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="q-tag">HARD</span> Why does scale_pos_weight = n_normal / n_abnormal specifically, not some other ratio?</summary>
+    <div class="answer">
+      <p>XGBoost's binary logistic loss gradient for a positive sample (y=1) is: <code>g = pred - y = p - 1</code>. For a negative sample: <code>g = pred - y = p - 0 = p</code>.</p>
+      <p><code>scale_pos_weight = w</code> multiplies the gradient AND hessian of positive samples by w. This is mathematically equivalent to replicating each positive sample w times. Setting <code>w = n_negative / n_positive</code> makes the total weighted contribution of both classes equal — the model trains as if the dataset were perfectly balanced.</p>
+      <p>Why not higher? If you set w = 3× the ratio, you overcorrect: the model aggressively predicts Abnormal for everything, achieving high recall but collapsing precision to near the class prior. Why not lower? Under-weighting underrepresented class → the model ignores Abnormal windows. The ratio = exact balance point.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="q-tag">HARD</span> What is the difference between the db4 wavelet energy ratio features and a simple FFT power feature?</summary>
+    <div class="answer">
+      <p>Both measure energy in frequency bands, but they differ in time-frequency resolution:</p>
+      <p><strong>FFT:</strong> Global frequency resolution. Perfect frequency resolution, zero time resolution. The FFT of a 10-second window tells you exactly what frequencies are present, but not <em>when</em> they occurred. For stationary signals this is fine.</p>
+      <p><strong>Wavelet (db4, level 5):</strong> Multi-resolution. At low frequencies (slow-wave band), uses long time windows (good frequency resolution). At high frequencies (cardiac band), uses short time windows (good time resolution). This matches the nature of ICP signals: slow waves are stationary over 10 seconds; cardiac pulses are transient spikes. The db4 (Daubechies 4) wavelet has a shape similar to the ICP cardiac pulse — this makes it particularly sensitive to ICP-relevant pulsatility patterns.</p>
+      <p>In practice, the wavelet energy fraction is more robust to non-stationarities (patient movement, cough artifacts) than FFT power because the wavelet's compact support means transient artifacts don't contaminate the entire spectrum.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="q-tag">HARD</span> How does the cross-dataset evaluation (train CHARIS → test MIMIC) prove generalisability, and what are its limits?</summary>
+    <div class="answer">
+      <p><strong>What it proves:</strong> The 6 spectral/wavelet ICP features encode physiological patterns that are consistent across two different ICU populations (TBI-specific CHARIS vs. general-ICU MIMIC), different hospitals, different monitoring equipment, and different time periods (CHARIS is older data). If the model performed well only on CHARIS-held-out but failed on MIMIC, it would mean it memorised TBI-specific ICP morphology rather than general ICP physiology.</p>
+      <p><strong>Limits:</strong></p>
+      <ol>
+        <li><strong>Domain shift direction:</strong> We train on 13 patients, test on 87. MIMIC has far more data and diversity. We're testing generalisation from a small specialist cohort to a large general cohort — a harder problem than the reverse.</li>
+        <li><strong>Both are invasive catheter datasets:</strong> The cross-dataset eval validates generalisation across hospitals, not across sensor modalities. The leap from catheter waveforms to optical TM displacement is validated by literature (Marchbanks, Skjæret-Maroni), not by this experiment.</li>
+        <li><strong>MIMIC population heterogeneity:</strong> MIMIC includes post-op, septic, and cardiac patients whose ICP physiology may differ from TBI. The model must learn ICP-specific patterns, not disease-specific ones.</li>
+      </ol>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="q-tag">HARD</span> Why is the bootstrap CI patient-level instead of window-level, and how much does it change the result?</summary>
+    <div class="answer">
+      <p><strong>The problem with window-level bootstrap:</strong> With 5,000 windows from Patient A and 3,000 from Patient B in the test set (8 patients total), each bootstrap sample (resample with replacement from 8,000 windows) will contain Patient A's windows ~5,000/8,000 ≈ 62.5% of the time. Patient A dominates every single bootstrap sample. The variance of the metric across bootstrap iterations reflects Patient A's within-patient variability, not the variance from having different patients.</p>
+      <p><strong>Patient-level bootstrap:</strong> Resample the 8 patients with replacement. Some bootstraps may have Patient A twice and Patient F not at all. The variance across iterations now reflects what would happen if we had different patients in our test set — the true source of uncertainty for a clinical deployment.</p>
+      <p><strong>Magnitude of difference:</strong> Typically, window-level CIs are 3–5× narrower than patient-level CIs on medical time-series data. A window-level 95% CI of [0.87, 0.89] might become [0.82, 0.92] with patient-level resampling. The point estimate doesn't change — only the uncertainty quantification.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="q-tag">HARD</span> What is McNemar's test and why use it instead of a paired t-test on AUC values?</summary>
+    <div class="answer">
+      <p><strong>McNemar's test</strong> operates on the 2×2 table of concordant/discordant predictions between two models on the same test set:</p>
+      <ul>
+        <li>b = windows where Model A is correct, Model B is wrong</li>
+        <li>c = windows where Model A is wrong, Model B is correct</li>
+      </ul>
+      <p>Under H₀ (both models make the same errors): b ≈ c. Test statistic: χ² = (|b−c| − 1)² / (b+c), df=1.</p>
+      <p><strong>Why not a t-test on AUC?</strong> AUC is computed from the ROC curve — it's a single scalar per model, not a distribution. A t-test requires multiple independent samples of AUC (e.g., from k-fold CV). McNemar's test uses the per-window predictions directly on the same test set — it's more statistically powerful because it accounts for the correlation between predictions (both models see the same windows). DeLong's test is the AUC-specific equivalent, also valid, but McNemar on binary predictions is simpler to explain and interpret.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="q-tag">HARD</span> The cardiac_amplitude feature multiplies by 10 — why, and could this create distribution shift?</summary>
+    <div class="answer">
+      <p>The multiplication by 10 converts the raw peak-to-peak bandpass amplitude from mmHg (or arbitrary units) to approximate micrometers (μm) — the unit used in the TM displacement literature for reporting pulsation amplitude. ICP P1 wave amplitudes are typically reported in the 10–80 μm range for TM displacement measurements. The ×10 scaling maps the raw ICP-derived amplitude into the same numerical range, making the FEATURE_RANGES (5–120 μm) physically interpretable.</p>
+      <p><strong>Distribution shift risk:</strong> None, because the scaling is a global constant applied identically to all windows during both training AND inference. The XGBoost model learns thresholds on the scaled values. As long as the scaling is applied consistently (enforced via <code>config.py</code> and the backend's validation), there is no shift. The risk would only appear if the hardware applied a different scaling — which is why config.py is the single source of truth for all feature ranges and the backend validates incoming features against those ranges before inference.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="q-tag">HARD</span> Why use `hist` tree_method instead of `exact`? What is the tradeoff?</summary>
+    <div class="answer">
+      <p><strong>Exact method:</strong> For each feature, sorts all training samples and evaluates every possible split point. Time complexity O(n·d·log n) per boosting round where n = samples, d = features. With 448K windows × 6 features × 500 rounds, this would take hours.</p>
+      <p><strong>Hist method (approximate):</strong> Pre-bins each feature into ~256 bins using a histogram. Split finding then operates on 256 candidate splits per feature instead of n. Time complexity O(n·d) for the initial histogram construction, then O(256·d) per round. 10–50× faster on large datasets.</p>
+      <p><strong>Quality tradeoff:</strong> Hist can miss the theoretically optimal split point if it falls between two bin edges. In practice, with 256 bins over the continuous feature range, the approximation error is negligible — the empirical AUC difference between exact and hist is typically &lt;0.001 on datasets of this size. The XGBoost documentation recommends hist for any dataset with &gt;10K samples, which is our case at 448K.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="q-tag">PROF</span> If a professor asks: "Is ICP reliably predictable from only 6 features?" — how do you answer?</summary>
+    <div class="answer">
+      <p><strong>Direct answer:</strong> Reliably classifiable (binary, above/below 15 mmHg) — yes, at AUC 0.949 across 100 patients from two independent datasets. Precisely predictable (exact ICP in mmHg) — no, and we don't attempt that.</p>
+      <p><strong>The deeper argument:</strong> The 6 features encode the four physiological ICP indices described in the literature — pulsatility index (cardiac_amplitude), compliance ratio (cardiac_power/slow_wave_power), cerebral perfusion pressure proxy (MAP), and respiratory ICP modulation (respiratory_amplitude). These are the same parameters clinical physicians assess when interpreting ICP waveform morphology. XGBoost learns the non-linear combinations of these clinically validated indices that separate Normal from Abnormal — it's not learning arbitrary correlations.</p>
+      <p><strong>The honest limitation:</strong> 6 features cannot capture all sources of ICP variation. Patient-specific anatomy (CSF space volume, brain compliance), medication effects (mannitol, sedation), and sensor placement variability all affect ICP without being encoded in these features. The 18.1% recall miss rate (1 − 0.819) likely represents these unobservable confounders rather than model failure.</p>
+    </div>
+  </details>
+
+  <details>
+    <summary><span class="q-tag">PROF</span> What would you do differently if you had 6 months and hospital data access?</summary>
+    <div class="answer">
+      <ol>
+        <li><strong>Collect simultaneous TM + invasive ICP data</strong> (N=30 patients). Even 5 patients would validate the sensor modality transfer. This is the single highest-impact addition.</li>
+        <li><strong>Add patient-specific features:</strong> Age, GCS score, diagnosis (TBI vs hydrocephalus vs tumour), current medication (mannitol dose, sedation level). These are strong confounders.</li>
+        <li><strong>Bayesian hyperparameter search</strong> (Optuna) instead of hand-tuned params. CV-guided search would likely find a better depth/lr/regularisation combination.</li>
+        <li><strong>Temporal XGBoost:</strong> Instead of treating each 10-second window independently, use a sliding window of XGBoost predictions as input to the next prediction — capturing ICP trends without the full LSTM complexity.</li>
+        <li><strong>Prospective deployment study:</strong> Run the monitor alongside a real ICU for 30 days, comparing alerts to clinical team decisions. This produces real-world sensitivity/specificity and identifies failure modes.</li>
+      </ol>
+    </div>
+  </details>
+
+</div>
+</section>
+
+<!-- ════════════════════════════════════════ -->
+<section id="glossary">
+<h2>17 · Glossary</h2>
+<div class="glossary">
+  <div class="gloss-item">
+    <div class="gloss-term">ICP</div>
+    <div class="gloss-def">Intracranial Pressure — pressure inside the skull. Normal: 5–15 mmHg. Abnormal: ≥15 mmHg.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">MAP</div>
+    <div class="gloss-def">Mean Arterial Pressure = (SBP + 2×DBP) / 3. CPP = MAP − ICP.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">CPP</div>
+    <div class="gloss-def">Cerebral Perfusion Pressure. Below 60 mmHg → ischemia risk. Makes MAP the most discriminative feature.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">TM Displacement</div>
+    <div class="gloss-def">Tympanic membrane movement caused by ICP-driven perilymph pressure changes. The non-invasive signal used by our sensor.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">AUC-ROC</div>
+    <div class="gloss-def">Area Under ROC Curve. 0.5 = random; 1.0 = perfect. Threshold-independent discrimination measure.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">ECE</div>
+    <div class="gloss-def">Expected Calibration Error. Measures how well predicted probabilities match actual outcome frequencies.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">SHAP</div>
+    <div class="gloss-def">SHapley Additive exPlanations. Decomposes each prediction into per-feature contributions. Exact for tree models.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">GroupShuffleSplit</div>
+    <div class="gloss-def">scikit-learn splitter that ensures all samples from a group (patient) appear in only one split partition.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">scale_pos_weight</div>
+    <div class="gloss-def">XGBoost parameter = n_negative / n_positive. Reweights loss so minority class gets equal total gradient contribution.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">db4 Wavelet</div>
+    <div class="gloss-def">Daubechies-4 wavelet. 4 vanishing moments. Shape similar to ICP cardiac pulse — optimal for ICP pulsatility analysis.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">sosfiltfilt</div>
+    <div class="gloss-def">Second-order sections (SOS) filter applied forward+backward. Produces zero phase distortion. Critical for waveform timing analysis.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">McNemar's Test</div>
+    <div class="gloss-def">Statistical test for comparing two classifiers on the same test set. Uses discordant prediction pairs. χ² distribution, df=1.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">Youden's J</div>
+    <div class="gloss-def">J = Sensitivity + Specificity − 1 = TPR − FPR. Maximised at the optimal ROC threshold.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">Lundberg Waves</div>
+    <div class="gloss-def">Slow ICP oscillations: A-waves (0.5–2 min, plateau ≥50 mmHg, pathological), B-waves (0.5–2 min, smaller). Captured by slow_wave_power.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">CHARIS</div>
+    <div class="gloss-def">PhysioNet TBI ICU dataset. 13 patients, simultaneous ICP+ABP. Used as primary training cohort.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">MIMIC-III WDB</div>
+    <div class="gloss-def">PhysioNet general ICU waveform database. ~7000 records, ~87 with ICP channel. Streamed via wfdb.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">hist tree_method</div>
+    <div class="gloss-def">XGBoost approximate split-finding using feature histograms. O(n·d) vs O(n·d·log n). Required for &gt;100K samples.</div>
+  </div>
+  <div class="gloss-item">
+    <div class="gloss-term">Bootstrap CI</div>
+    <div class="gloss-def">95% confidence interval from 1000 resampled patient populations. Patient-level resampling required for clustered medical data.</div>
+  </div>
+</div>
+</section>
+
+<!-- ── FOOTER ── -->
+<div style="margin-top:4rem;padding-top:2rem;border-top:1px solid var(--border);color:var(--muted);font-size:0.82rem;">
+  <p>XGBoost ICP Classifier · CHARIS + MIMIC-III · PhysioNet · IEEE EMBC Capstone · 2026</p>
+  <p style="margin-top:0.3rem;">Pipeline: <code>build_mimic_features.py</code> → <code>train_binary.py</code> → <code>baseline_comparison.py</code> → <code>cross_dataset_eval.py</code> → <code>icp-monitor-web/backend/main.py</code></p>
+</div>
+
+</div><!-- /container -->
+</body>
+</html>
