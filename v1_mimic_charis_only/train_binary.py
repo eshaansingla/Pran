@@ -47,6 +47,31 @@ CLASS_NAMES = ["Normal", "Abnormal"]
 # Data
 # ---------------------------------------------------------------------------
 
+def _add_derived_features(X: np.ndarray) -> np.ndarray:
+    """
+    Append 3 ratio features derivable from the base 6 without re-extracting waveforms.
+    Col layout: 0=cardiac_amp, 1=cardiac_freq, 2=resp_amp, 3=slow_pwr, 4=cardiac_pwr, 5=MAP
+    New cols:
+      6  pp_ratio          = cardiac_amp / (MAP + 1e-6)      — ICP rises as CPP narrows
+      7  cr_coupling       = cardiac_amp / (resp_amp + 1e-6) — decouples early in ICP rise
+      8  spectral_entropy  = -(slow_pwr*log(slow_pwr+eps) + cardiac_pwr*log(cardiac_pwr+eps))
+    All values clipped to physiological range to guard against division artefacts.
+    No window-to-window look-ahead — each row is computed from its own 6 values only.
+    """
+    eps = 1e-6
+    ca  = X[:, 0]
+    ra  = X[:, 2]
+    sp  = np.clip(X[:, 3], eps, 1.0)
+    cp  = np.clip(X[:, 4], eps, 1.0)
+    mp  = X[:, 5]
+
+    pp_ratio   = np.clip(ca / (mp + eps), 0.0, 5.0).reshape(-1, 1)
+    cr_coupling= np.clip(ca / (ra + eps), 0.0, 50.0).reshape(-1, 1)
+    spec_ent   = (-(sp * np.log(sp) + cp * np.log(cp))).reshape(-1, 1)
+
+    return np.hstack([X, pp_ratio, cr_coupling, spec_ent]).astype(np.float32)
+
+
 def load_binary(processed_dir: Path):
     # Keep only the 6 validated features; drop head_angle (col 6) and
     # motion_artifact_flag (col 7) — ablation confirmed 0% gain and noise.
@@ -66,8 +91,10 @@ def load_binary(processed_dir: Path):
     pid = np.concatenate([ch_pid, mi_pid])
 
     # Relabel: 0=Normal, 1=Abnormal (Elevated+Critical)
+    # NOTE: derived features are added AFTER SMOTE in run() to avoid
+    # synthetic samples where pp_ratio != cardiac_amp/MAP.
     y = (y3 >= 1).astype(np.int64)
-    return X, y, pid
+    return X, y, pid  # 6 base features only
 
 
 def print_dist(y, tag):
@@ -129,7 +156,8 @@ def patient_split(X, y, pid):
 
 def train(X_tr, y_tr, X_va, y_va):
     n0, n1 = (y_tr == 0).sum(), (y_tr == 1).sum()
-    spw = round(n0 / n1, 4)
+    # After undersampling, classes are equal → SPW=1.0
+    spw = round(n0 / n1, 4) if abs(n0 - n1) > n0 * 0.05 else 1.0
     print(f"  scale_pos_weight = {spw}  (Normal {n0:,} / Abnormal {n1:,})")
 
     dtrain = xgb.DMatrix(X_tr, label=y_tr)
@@ -373,20 +401,32 @@ def evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir: Path,
 # 5-fold Grouped Cross-Validation
 # ---------------------------------------------------------------------------
 
-def grouped_cv(X, y, pid, n_splits=5):
-    """Run 5-fold patient-level cross-validation and report mean ± std."""
+def grouped_cv(X, y, pid, n_splits=5, threshold: float = 0.5):
+    """
+    Run 5-fold patient-level cross-validation and report mean ± std.
+
+    threshold: decision boundary applied to probabilities. Pass the same
+               Youden's-J threshold used at test time so CV F1 is comparable
+               to the reported test F1 (avoids threshold inconsistency).
+    """
     from sklearn.model_selection import GroupKFold
 
     print(f"\n{'='*60}")
-    print(f"  {n_splits}-FOLD GROUPED CROSS-VALIDATION")
+    print(f"  {n_splits}-FOLD GROUPED CROSS-VALIDATION  (threshold={threshold:.4f})")
     print(f"{'='*60}")
 
     gkf = GroupKFold(n_splits=n_splits)
     fold_metrics = []
 
     for fold, (tr_idx, te_idx) in enumerate(gkf.split(X, y, groups=pid)):
-        X_fold_tr, y_fold_tr = X[tr_idx], y[tr_idx]
         X_fold_te, y_fold_te = X[te_idx], y[te_idx]
+
+        # SMOTE on base 6 features only — derived features added after so
+        # synthetic samples maintain consistent ratio relationships.
+        from imblearn.over_sampling import SMOTE
+        sm_cv = SMOTE(random_state=SEED, k_neighbors=5)
+        X_smote_cv, y_fold_tr = sm_cv.fit_resample(X[tr_idx][:, :6], y[tr_idx])
+        X_fold_tr = _add_derived_features(X_smote_cv)  # consistent 9 features
 
         n0, n1 = (y_fold_tr == 0).sum(), (y_fold_tr == 1).sum()
         spw = round(n0 / max(n1, 1), 4)
@@ -407,7 +447,7 @@ def grouped_cv(X, y, pid, n_splits=5):
                          early_stopping_rounds=30, verbose_eval=0)
 
         probs = bst.predict(dtest)
-        preds = (probs >= 0.5).astype(int)
+        preds = (probs >= threshold).astype(int)
         f1 = f1_score(y_fold_te, preds, zero_division=0)
         auc_val = roc_auc_score(y_fold_te, probs)
         prec = precision_score(y_fold_te, preds, zero_division=0)
@@ -591,7 +631,7 @@ def run(processed_dir: Path, out_dir: Path):
 
     print("\n[1/7] Loading and relabelling data ...")
     X, y, pid = load_binary(processed_dir)
-    print(f"  Total: {len(X):,} windows | {len(np.unique(pid))} patients | 6 features")
+    print(f"  Total: {len(X):,} windows | {len(np.unique(pid))} patients | 6 base features")
     print_dist(y, "Combined")
 
     print("\n[2/7] Dataset-stratified split (70 / 10 / 20) ...")
@@ -604,13 +644,34 @@ def run(processed_dir: Path, out_dir: Path):
     print(f"  Test  : {len(X_te):,} windows | {len(np.unique(pid_te))} patients")
     print_dist(y_te, "Test ")
 
+    # Balance training set with SMOTE on BASE 6 features only.
+    # Derived features are added AFTER SMOTE so that every synthetic sample
+    # satisfies pp_ratio == cardiac_amp/MAP exactly (no interpolation artefacts).
+    # SMOTE is fit ONLY on X_tr — val and test are never seen here.
+    from imblearn.over_sampling import SMOTE
+    n0_pre, n1_pre = (y_tr == 0).sum(), (y_tr == 1).sum()
+    print(f"  Pre-SMOTE  : Normal {n0_pre:,} | Abnormal {n1_pre:,}")
+    sm = SMOTE(random_state=SEED, k_neighbors=5)
+    X_tr_smote, y_tr_bal = sm.fit_resample(X_tr, y_tr)  # 6 features
+    X_tr_bal = _add_derived_features(X_tr_smote)         # 9 features, consistent
+    print(f"  Post-SMOTE : Normal {(y_tr_bal==0).sum():,} | Abnormal {(y_tr_bal==1).sum():,} (synthetic minority added)")
+    print(f"  Derived features added post-SMOTE: 9 total features")
+
+    # Add derived features to val and test (real samples — always consistent)
+    X_va = _add_derived_features(X_va)
+    X_te = _add_derived_features(X_te)
+
+    # 9-feature version of full dataset for grouped CV
+    X_9 = _add_derived_features(X)
+
     # Use CHARIS-only val for early stopping (balanced signal)
+    # NOTE: pid_va mask computed before X_va is overwritten with 9-feat version above
     ch_va = pid_va <= 13
-    X_va_es = X_va[ch_va] if ch_va.any() else X_va
+    X_va_es = X_va[ch_va] if ch_va.any() else X_va   # already 9-feat
     y_va_es = y_va[ch_va] if ch_va.any() else y_va
     print(f"  Early-stop val: {len(X_va_es):,} CHARIS windows")
 
-    bst, spw = train(X_tr, y_tr, X_va_es, y_va_es)
+    bst, spw = train(X_tr_bal, y_tr_bal, X_va_es, y_va_es)
 
     # Find optimal threshold on RAW probabilities using Youden's J on val set
     # Isotonic calibration was squishing probs (max 0.999->0.82), destroying recall.
@@ -640,11 +701,11 @@ def run(processed_dir: Path, out_dir: Path):
     ece_after = round(ece_raw, 4)  # same since no calibration
 
     print("\n[4/7] Evaluating (raw probabilities) ...")
-    metrics = evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir, None, threshold)
+    metrics = evaluate(bst, X_tr_bal, y_tr_bal, X_te, y_te, out_dir, None, threshold)
 
     # --- 5-fold Grouped CV ---
     print("\n[5/7] Running 5-fold grouped cross-validation ...")
-    cv_results = grouped_cv(X, y, pid, n_splits=5)
+    cv_results = grouped_cv(X_9, y, pid, n_splits=5, threshold=threshold)
 
     # --- Bootstrap CIs ---
     print("\n[6/7] Computing bootstrapped 95% confidence intervals ...")
