@@ -39,11 +39,16 @@ TARGET_FS      = 125
 WINDOW_SAMPLES = 1250          # 10 s × 125 Hz
 WAVELET        = "db4"
 WAVELET_LEVEL  = 5
-ICP_THRESHOLD  = 15.0          # mmHg
+ICP_THRESHOLD  = 20.0          # mmHg [Ye et al. 2022 / BTF 2016]
+YE_CLIP_LO     = -5.0          # [Ye et al. 2022]
+YE_CLIP_HI     = 50.0          # [Ye et al. 2022]
+YE_SMOOTH_WIN  = 60_000        # 20 min × 50 Hz (native) [Ye et al. 2022]
+YE_SMOOTH_STEP = 3_000         # 1 min  × 50 Hz (native) [Ye et al. 2022]
+YE_SMOOTH_STD  = 3.0           # ±3 SD                   [Ye et al. 2022]
 
 ICP_CHANNELS   = {"ICP", "ICP1", "ICP2"}
 ABP_CHANNELS   = {"ABP", "ART", "ABPI", "ABP1"}
-ICP_VALID_RANGE = (0.0, 60.0)
+ICP_VALID_RANGE = (-5.0, 50.0)  # [Ye et al. 2022]
 ABP_VALID_RANGE = (40.0, 200.0)
 MAX_MISSING_FRAC = 0.20
 
@@ -56,6 +61,30 @@ CLIP_RANGES = [
     (0.0,  0.40),    # cardiac_power
     (40.0, 200.0),   # mean_arterial_pressure
 ]
+
+
+# ── Ye et al. 2022 preprocessing (PMC9252333) ────────────────────────────────
+
+def _ye_preprocess(x: np.ndarray) -> np.ndarray:
+    """Step 1: clip [-5,50], forward-fill. Step 2: sliding ±3SD outlier→mean."""
+    x = x.astype(np.float64).copy()
+    x[(x < YE_CLIP_LO) | (x > YE_CLIP_HI)] = np.nan
+    # Vectorized forward-fill (avoids sample-by-sample Python loop)
+    mask = np.isnan(x)
+    if mask.all():
+        return np.zeros(len(x), dtype=np.float32)
+    if mask.any():
+        idx = np.where(~mask, np.arange(len(x)), 0)
+        np.maximum.accumulate(idx, out=idx)
+        x = x[idx]
+    n = len(x)
+    for start in range(0, n, YE_SMOOTH_STEP):
+        end = min(start + YE_SMOOTH_WIN, n)
+        seg = x[start:end]
+        m, s = np.nanmean(seg), np.nanstd(seg)
+        if s > 1e-9:
+            x[start:end][np.abs(seg - m) > YE_SMOOTH_STD * s] = m
+    return x.astype(np.float32)
 
 
 # ── Signal helpers ────────────────────────────────────────────────────────────
@@ -185,7 +214,9 @@ def main():
         icp_raw = rec.p_signal[:, icp_idx].astype(np.float32)
         abp_raw = rec.p_signal[:, abp_idx].astype(np.float32) if abp_idx is not None else None
 
-        icp_125 = _resample(icp_raw, orig_fs)
+        # Ye et al. preprocessing at native rate, then resample [Ye et al. 2022]
+        icp_clean_native = _ye_preprocess(icp_raw.astype(np.float32))
+        icp_125 = _resample(icp_clean_native, orig_fs)
         abp_125 = _resample(abp_raw, orig_fs) if abp_raw is not None else None
 
         n_windows = len(icp_125) // WINDOW_SAMPLES
@@ -200,7 +231,8 @@ def main():
                 n_skip += 1
                 continue
 
-            label = 1 if float(np.nanmean(icp_win)) >= ICP_THRESHOLD else 0
+            # [Ye et al. 2022] >60% of samples >= 20 mmHg → abnormal
+            label = 1 if (icp_win >= ICP_THRESHOLD).mean() > 0.60 else 0
             feat  = _extract_features(icp_win, abp_win)
             if feat is None:
                 n_skip += 1
