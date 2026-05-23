@@ -9,12 +9,12 @@ Reads local .dat files from data/raw/charis/ and produces:
   data/processed/patient_ids.npy     (N_charis,)    int32
 
 Feature order (must match v1 config.py and train_binary.py KEEP=[0..5]):
-  0  cardiac_amplitude      peak-to-peak ICP in 0.7-2.5 Hz band
-  1  cardiac_frequency      dominant freq in cardiac band (Hz)
-  2  respiratory_amplitude  peak-to-peak ICP in 0.1-0.5 Hz band
-  3  slow_wave_power        wavelet energy fraction (cA5+cD5, db4 level-5, 125 Hz)
-  4  cardiac_power          wavelet energy fraction (cD4, db4 level-5, 125 Hz)
-  5  mean_arterial_pressure real MAP from ABP waveform (not constant 90)
+  0  cardiac_amplitude      (P99-P1)×10 in um, ICP bandpass 1.0-2.5 Hz
+  1  cardiac_frequency      dominant freq in 0.7-2.5 Hz band (Hz)
+  2  respiratory_amplitude  (P99-P1)×10 in um, ICP bandpass 0.1-0.5 Hz
+  3  slow_wave_power        wavelet energy fraction cA5 only (db4 level-5, 125 Hz)
+  4  cardiac_power          wavelet energy fraction cD5 (db4 level-5, 125 Hz)
+  5  mean_arterial_pressure real MAP from ABP waveform — window skipped if no ABP
 
 ICP >= 15 mmHg → label 1 (Abnormal), else 0 (Normal).
 CHARIS patient IDs: 1 to 13.
@@ -94,11 +94,11 @@ def _extract_features(icp_win: np.ndarray, abp_win: np.ndarray | None) -> np.nda
     icp = icp_win.copy()
     icp[np.isnan(icp)] = np.nanmean(icp)
 
-    # cardiac_amplitude
-    cardiac = _bandpass(icp, 0.7, 2.5)
-    card_amp = float(cardiac.max() - cardiac.min())
+    # cardiac_amplitude — 1.0-2.5 Hz band, (P99-P1)×10 in um (matches MIMIC extractor)
+    cardiac = _bandpass(icp, 1.0, 2.5)
+    card_amp = float(np.percentile(cardiac, 99) - np.percentile(cardiac, 1)) * 10.0
 
-    # cardiac_frequency
+    # cardiac_frequency — dominant freq in 0.7-2.5 Hz band
     freqs = np.fft.rfftfreq(len(cardiac), d=1.0 / TARGET_FS)
     fft   = np.abs(np.fft.rfft(cardiac))
     mask  = (freqs >= 0.7) & (freqs <= 2.5)
@@ -106,18 +106,19 @@ def _extract_features(icp_win: np.ndarray, abp_win: np.ndarray | None) -> np.nda
         return None
     card_freq = float(freqs[mask][np.argmax(fft[mask])])
 
-    # respiratory_amplitude
+    # respiratory_amplitude — (P99-P1)×10 in um (matches MIMIC extractor)
     resp = _bandpass(icp, 0.1, 0.5)
-    resp_amp = float(resp.max() - resp.min())
+    resp_amp = float(np.percentile(resp, 99) - np.percentile(resp, 1)) * 10.0
 
-    # wavelet decomposition (db4, level 5, at 125 Hz)
+    # wavelet decomposition (db4, level 5, at 125 Hz — no resampling)
     coeffs   = pywt.wavedec(icp, WAVELET, level=WAVELET_LEVEL)
     energies = [float(np.sum(c ** 2)) for c in coeffs]
     total_e  = sum(energies) + 1e-9
-    slow_power    = (energies[0] + energies[1]) / total_e  # cA5 + cD5
-    cardiac_power = energies[2] / total_e                  # cD4
+    # cA5 only (index 0) = slow/DC component; cD5 (index 1) = cardiac band
+    slow_power    = energies[0] / total_e   # cA5 only
+    cardiac_power = energies[1] / total_e   # cD5
 
-    # MAP from ABP (real value, not constant)
+    # MAP from ABP (real value — no fallback; skip window if ABP unavailable)
     if abp_win is not None and not np.isnan(abp_win).all():
         abp = abp_win.copy()
         abp[np.isnan(abp)] = np.nanmean(abp)
@@ -126,8 +127,7 @@ def _extract_features(icp_win: np.ndarray, abp_win: np.ndarray | None) -> np.nda
             (np.percentile(abp, 90) - np.percentile(abp, 10)) / 3.0
         )
     else:
-        # Physiological fallback: CPP ≈ 70 → MAP ≈ ICP_mean + 70
-        map_est = float(np.nanmean(icp) + 70.0)
+        return None  # no ABP → window unusable (avoids label leakage)
 
     feat = np.array([
         card_amp, card_freq, resp_amp,

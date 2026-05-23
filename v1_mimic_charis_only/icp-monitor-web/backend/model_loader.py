@@ -7,7 +7,7 @@ Binary classification: Normal (<15 mmHg) vs Abnormal (>=15 mmHg).
 
 Rationale: the 3-class model's Elevated decision region collapsed to
 max 3% probability under any input. Binary at the 15 mmHg clinical
-intervention threshold is honest and well-calibrated (F1=0.88, AUC=0.96).
+intervention threshold is honest and well-calibrated.
 """
 from __future__ import annotations
 
@@ -38,16 +38,14 @@ FEATURE_UNITS = {
     "mean_arterial_pressure": "mmHg",
 }
 FEATURE_RANGES = {
-    "cardiac_amplitude":      (5.0, 120.0),     # μm — widened for MIMIC variability
-    "cardiac_frequency":      (0.7, 2.5),       # Hz — 42-150 bpm
-    "respiratory_amplitude":  (1.0, 50.0),      # μm — widened for MIMIC variability
-    # slow_wave_power = wavelet energy fraction in 0–1.56 Hz band (db4, level-5).
-    # Near-1.0 = normal; lower = more high-freq activity.
+    "cardiac_amplitude":      (5.0, 120.0),     # um -- widened for MIMIC variability
+    "cardiac_frequency":      (0.7, 2.5),       # Hz -- 42-150 bpm
+    "respiratory_amplitude":  (1.0, 50.0),      # um -- widened for MIMIC variability
+    # slow_wave_power = wavelet energy fraction in 0-1.56 Hz band (db4, level-5).
     "slow_wave_power":        (0.30, 1.0),
-    # cardiac_power = wavelet energy fraction in 1.56–3.12 Hz band.
-    # Training data max reaches ~0.35 for unusual MIMIC spectra.
+    # cardiac_power = wavelet energy fraction in 1.56-3.12 Hz band.
     "cardiac_power":          (0.0, 0.40),
-    "mean_arterial_pressure": (40.0, 200.0),    # mmHg — clamped in extraction
+    "mean_arterial_pressure": (40.0, 200.0),    # mmHg -- clamped in extraction
 }
 CLASS_NAMES = ["Normal", "Abnormal"]
 
@@ -98,7 +96,8 @@ def load_model(path: Path | None = None) -> xgb.Booster:
         try:
             with gzip.open(cal_path, "rb") as fh:
                 _calibrator = pickle.load(fh)
-            _calibrated = True
+            # Only mark calibrated if we actually loaded a non-None calibrator
+            _calibrated = _calibrator is not None
         except Exception as exc:
             print(f"[model_loader] Calibrator load failed ({exc}); using raw probabilities")
 
@@ -140,10 +139,10 @@ def predict_single(features: list[float]) -> dict[str, Any]:
     abs_shap      = np.abs(shap_vals)
     top3_idx      = abs_shap.argsort()[::-1][:3]
 
-    lo  = [FEATURE_RANGES[FEATURE_NAMES[i]][0] for i in range(6)]
-    hi  = [FEATURE_RANGES[FEATURE_NAMES[i]][1] for i in range(6)]
-    mid = [(lo[i] + hi[i]) / 2 for i in range(6)]
-    rng = [(hi[i] - lo[i]) or 1.0 for i in range(6)]
+    lo  = [FEATURE_RANGES[FEATURE_NAMES[i]][0] for i in range(len(FEATURE_NAMES))]
+    hi  = [FEATURE_RANGES[FEATURE_NAMES[i]][1] for i in range(len(FEATURE_NAMES))]
+    mid = [(lo[i] + hi[i]) / 2 for i in range(len(FEATURE_NAMES))]
+    rng = [(hi[i] - lo[i]) or 1.0 for i in range(len(FEATURE_NAMES))]
 
     top_features = []
     for idx in top3_idx:
@@ -214,12 +213,12 @@ def get_model_info() -> dict[str, Any]:
         "calibrated":     _calibrated,
         "ece_after_calibration": _meta.get("ece_after_calibration"),
         "metrics": {
-            "f1":               saved_metrics.get("f1",           0.8770),
-            "auc":              saved_metrics.get("auc",          0.9490),
-            "precision":        saved_metrics.get("precision",    0.9443),
-            "recall":           saved_metrics.get("recall",       0.8186),
-            "specificity":      saved_metrics.get("specificity",  0.9510),
-            "balanced_accuracy":saved_metrics.get("balanced_acc", 0.8848),
+            "f1":               saved_metrics.get("f1",           0.728),
+            "auc":              saved_metrics.get("auc",          0.851),
+            "precision":        saved_metrics.get("precision",    0.643),
+            "recall":           saved_metrics.get("recall",       0.840),
+            "specificity":      saved_metrics.get("specificity",  0.717),
+            "balanced_accuracy":saved_metrics.get("balanced_acc", 0.779),
         },
         "training_date": _meta.get("training_date", "2026-04-05"),
         "training_data": {
@@ -232,12 +231,13 @@ def get_model_info() -> dict[str, Any]:
         "feature_ranges":    {k: list(v) for k, v in FEATURE_RANGES.items()},
         "classes":           CLASS_NAMES,
         "hyperparameters": {
-            "learning_rate":    0.1,
-            "max_depth":        4,
-            "n_estimators":     420,
+            "learning_rate":    0.05,
+            "max_depth":        6,
+            "n_estimators":     1000,
             "subsample":        0.8,
             "colsample_bytree": 0.8,
             "scale_pos_weight": round(_meta.get("scale_pos_weight", 0.4756), 4),
+            "device":           "cuda (GPU) if available, else cpu",
         },
         "global_importances": _global_importances,
         "previous_model_note": (

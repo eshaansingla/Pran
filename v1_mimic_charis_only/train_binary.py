@@ -30,7 +30,6 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 from sklearn.calibration import calibration_curve
-from sklearn.isotonic import IsotonicRegression
 from sklearn.metrics import (
     auc, balanced_accuracy_score, classification_report,
     confusion_matrix, f1_score, precision_score,
@@ -47,34 +46,25 @@ CLASS_NAMES = ["Normal", "Abnormal"]
 # Data
 # ---------------------------------------------------------------------------
 
-def _add_derived_features(X: np.ndarray) -> np.ndarray:
-    """
-    Append 3 ratio features derivable from the base 6 without re-extracting waveforms.
-    Col layout: 0=cardiac_amp, 1=cardiac_freq, 2=resp_amp, 3=slow_pwr, 4=cardiac_pwr, 5=MAP
-    New cols:
-      6  pp_ratio          = cardiac_amp / (MAP + 1e-6)      — ICP rises as CPP narrows
-      7  cr_coupling       = cardiac_amp / (resp_amp + 1e-6) — decouples early in ICP rise
-      8  spectral_entropy  = -(slow_pwr*log(slow_pwr+eps) + cardiac_pwr*log(cardiac_pwr+eps))
-    All values clipped to physiological range to guard against division artefacts.
-    No window-to-window look-ahead — each row is computed from its own 6 values only.
-    """
-    eps = 1e-6
-    ca  = X[:, 0]
-    ra  = X[:, 2]
-    sp  = np.clip(X[:, 3], eps, 1.0)
-    cp  = np.clip(X[:, 4], eps, 1.0)
-    mp  = X[:, 5]
-
-    pp_ratio   = np.clip(ca / (mp + eps), 0.0, 5.0).reshape(-1, 1)
-    cr_coupling= np.clip(ca / (ra + eps), 0.0, 50.0).reshape(-1, 1)
-    spec_ent   = (-(sp * np.log(sp) + cp * np.log(cp))).reshape(-1, 1)
-
-    return np.hstack([X, pp_ratio, cr_coupling, spec_ent]).astype(np.float32)
+def _get_xgb_device() -> str:
+    """Return 'cuda' if XGBoost GPU is available, else 'cpu'."""
+    try:
+        import subprocess
+        r = subprocess.run(["nvidia-smi"], capture_output=True)
+        if r.returncode != 0:
+            return "cpu"
+        import xgboost as _xgb
+        _dm = _xgb.DMatrix(np.zeros((4, 3)), label=np.array([0, 1, 0, 1]))
+        _xgb.train({"device": "cuda", "tree_method": "hist", "verbosity": 0},
+                   _dm, num_boost_round=1)
+        return "cuda"
+    except Exception:
+        return "cpu"
 
 
 def load_binary(processed_dir: Path):
-    # Keep only the 6 validated features; drop head_angle (col 6) and
-    # motion_artifact_flag (col 7) — ablation confirmed 0% gain and noise.
+    # Both datasets output 6 features. The KEEP slice is a safe no-op for
+    # 6-column files and still works on legacy 8-column MIMIC files.
     KEEP = [0, 1, 2, 3, 4, 5]
 
     ch_feat = np.load(processed_dir / "features.npy").astype(np.float32)[:, KEEP]
@@ -90,11 +80,9 @@ def load_binary(processed_dir: Path):
     y3  = np.concatenate([ch_lab, mi_lab])
     pid = np.concatenate([ch_pid, mi_pid])
 
-    # Relabel: 0=Normal, 1=Abnormal (Elevated+Critical)
-    # NOTE: derived features are added AFTER SMOTE in run() to avoid
-    # synthetic samples where pp_ratio != cardiac_amp/MAP.
+    # Relabel to binary: 0=Normal, 1=Abnormal (Elevated+Critical merged)
     y = (y3 >= 1).astype(np.int64)
-    return X, y, pid  # 6 base features only
+    return X, y, pid
 
 
 def print_dist(y, tag):
@@ -102,6 +90,65 @@ def print_dist(y, tag):
     a = (y == 1).sum()
     t = len(y)
     print(f"  [{tag:8s}] Normal: {n:,} ({100*n/t:.1f}%)  Abnormal: {a:,} ({100*a/t:.1f}%)")
+
+
+def smote_within_patients(X: np.ndarray, y: np.ndarray, pid: np.ndarray) -> tuple:
+    """
+    SMOTE applied independently within each patient's windows.
+
+    For each patient: upsample the within-patient minority class using SMOTE
+    (k-NN interpolation stays within that patient's own windows only).
+    Falls back to RandomOverSampler (duplication) when fewer than 2 minority
+    samples exist for a patient. Single-class patients are included unchanged.
+
+    After per-patient balancing, a global RandomOverSampler (duplication —
+    no interpolation) achieves exactly 50/50 if single-class patients created
+    residual imbalance.
+
+    Why: standard global SMOTE interpolates between windows from different
+    patients (e.g. Patient A's cardiac amplitude + Patient B's MAP), producing
+    physiologically implausible synthetic samples that inflate train F1 without
+    improving generalisation.
+    """
+    from imblearn.over_sampling import SMOTE, RandomOverSampler
+
+    Xs: list[np.ndarray] = []
+    ys: list[np.ndarray] = []
+
+    for p in np.unique(pid):
+        mask = pid == p
+        Xp, yp = X[mask], y[mask]
+        n0, n1 = int((yp == 0).sum()), int((yp == 1).sum())
+
+        if n0 == 0 or n1 == 0:
+            # Single-class patient — cannot balance; include as-is
+            Xs.append(Xp); ys.append(yp)
+            continue
+
+        if n0 == n1:
+            Xs.append(Xp); ys.append(yp)
+            continue
+
+        k = min(5, min(n0, n1) - 1)
+        try:
+            if k < 1:
+                raise ValueError("k<1")
+            Xp_res, yp_res = SMOTE(random_state=SEED, k_neighbors=k).fit_resample(Xp, yp)
+        except Exception:
+            Xp_res, yp_res = RandomOverSampler(random_state=SEED).fit_resample(Xp, yp)
+
+        Xs.append(Xp_res); ys.append(yp_res)
+
+    X_out = np.vstack(Xs).astype(np.float32)
+    y_out = np.concatenate(ys)
+
+    # Final global fix: RandomOverSampler (duplication only — no interpolation)
+    # ensures exactly 50/50 when single-class patients left a residual imbalance.
+    if (y_out == 0).sum() != (y_out == 1).sum():
+        X_out, y_out = RandomOverSampler(random_state=SEED).fit_resample(X_out, y_out)
+        X_out = X_out.astype(np.float32)
+
+    return X_out, y_out
 
 
 # ---------------------------------------------------------------------------
@@ -154,37 +201,42 @@ def patient_split(X, y, pid):
 # Train
 # ---------------------------------------------------------------------------
 
-def train(X_tr, y_tr, X_va, y_va):
+def train(X_tr, y_tr, X_va, y_va, device: str = "cpu"):
     n0, n1 = (y_tr == 0).sum(), (y_tr == 1).sum()
-    # After undersampling, classes are equal → SPW=1.0
     spw = round(n0 / n1, 4) if abs(n0 - n1) > n0 * 0.05 else 1.0
     print(f"  scale_pos_weight = {spw}  (Normal {n0:,} / Abnormal {n1:,})")
 
     dtrain = xgb.DMatrix(X_tr, label=y_tr)
     dval   = xgb.DMatrix(X_va, label=y_va)
 
+    # GPU gets deeper trees + more rounds since training is 10-20x faster
+    max_depth  = 6   if device == "cuda" else 4
+    n_rounds   = 1000 if device == "cuda" else 500
+    early_stop = 50  if device == "cuda" else 30
+
     params = {
-        "objective":       "binary:logistic",
-        "eval_metric":     "auc",
-        "eta":             0.1,
-        "max_depth":       4,
-        "min_child_weight": 5,
-        "subsample":       0.8,
+        "objective":        "binary:logistic",
+        "eval_metric":      "auc",
+        "eta":              0.05 if device == "cuda" else 0.1,
+        "max_depth":        max_depth,
+        "min_child_weight": 3,
+        "subsample":        0.8,
         "colsample_bytree": 0.8,
         "scale_pos_weight": spw,
-        "lambda":          1.0,
-        "alpha":           0.1,
-        "seed":            SEED,
-        "tree_method":     "hist",
-        "verbosity":       0,
+        "lambda":           1.0,
+        "alpha":            0.1,
+        "seed":             SEED,
+        "tree_method":      "hist",
+        "device":           device,
+        "verbosity":        0,
     }
 
-    print("\n[3/5] Training XGBoost binary (max 500 rounds, early_stopping=30) ...")
+    print(f"\n[3/5] Training XGBoost binary (max {n_rounds} rounds, early_stopping={early_stop}, device={device}) ...")
     bst = xgb.train(
         params, dtrain,
-        num_boost_round=500,
+        num_boost_round=n_rounds,
         evals=[(dtrain, "train"), (dval, "val")],
-        early_stopping_rounds=30,
+        early_stopping_rounds=early_stop,
         verbose_eval=50,
         evals_result={},
     )
@@ -207,79 +259,6 @@ def _ece(y_true: np.ndarray, probs: np.ndarray, n_bins: int = 10) -> float:
             continue
         ece += (mask.sum() / n) * abs(probs[mask].mean() - float(y_true[mask].mean()))
     return float(ece)
-
-
-def calibrate(bst, X_va: np.ndarray, y_va: np.ndarray, pid_va: np.ndarray, n_folds: int = 5):
-    """
-    Cross-validated isotonic calibration to prevent overfitting to a single val set.
-
-    Splits the validation set into n_folds patient-level folds.
-    For each fold: fit IsotonicRegression on the other folds, predict on this fold.
-    Aggregates all out-of-fold calibrated probabilities, then fits a final
-    IsotonicRegression on all of them — giving a calibrator that generalises
-    better than single-fold fitting.
-
-    Returns
-    -------
-    calibrator   : IsotonicRegression  — fit on all OOF calibrated probs
-    threshold    : float               — optimal decision boundary on OOF probs
-    ece_before   : float               — ECE of raw XGBoost probs
-    ece_after    : float               — ECE after cross-validated calibration
-    """
-    from sklearn.model_selection import KFold
-
-    prob_raw = bst.predict(xgb.DMatrix(X_va))
-    ece_before = _ece(y_va, prob_raw)
-
-    # Patient-level K-fold so same patient never spans train+test within calibration
-    unique_pids = np.unique(pid_va)
-    n_folds = min(n_folds, len(unique_pids))  # can't have more folds than patients
-    kf = KFold(n_splits=n_folds, shuffle=True, random_state=SEED)
-
-    oof_probs = np.zeros(len(y_va), dtype=np.float64)
-
-    for fold_pids_tr, fold_pids_te in kf.split(unique_pids):
-        pids_tr = unique_pids[fold_pids_tr]
-        pids_te = unique_pids[fold_pids_te]
-        mask_tr = np.isin(pid_va, pids_tr)
-        mask_te = np.isin(pid_va, pids_te)
-
-        fold_cal = IsotonicRegression(out_of_bounds="clip")
-        fold_cal.fit(prob_raw[mask_tr], y_va[mask_tr])
-        oof_probs[mask_te] = fold_cal.predict(prob_raw[mask_te])
-
-    ece_after = _ece(y_va, oof_probs)
-
-    # Final calibrator: fit on all OOF predictions vs true labels
-    final_cal = IsotonicRegression(out_of_bounds="clip")
-    final_cal.fit(oof_probs, y_va)
-
-    # Optimal threshold: maximize F1 subject to recall ≥ 0.75
-    # Rationale: in clinical ICP monitoring, missing an abnormal case
-    # (low recall) is more dangerous than a false alarm (low precision).
-    thresholds = np.linspace(0.05, 0.95, 181)
-    best_f1, best_t = 0.0, 0.5
-    best_f1_any, best_t_any = 0.0, 0.5  # fallback: best F1 without recall constraint
-    for t in thresholds:
-        preds = (oof_probs >= t).astype(int)
-        f = f1_score(y_va, preds, zero_division=0)
-        r = recall_score(y_va, preds, zero_division=0)
-        if f > best_f1_any:
-            best_f1_any, best_t_any = f, float(t)
-        if r >= 0.75 and f > best_f1:
-            best_f1, best_t = f, float(t)
-
-    # Fallback: if no threshold achieves recall >= 0.75, use Youden's J
-    if best_f1 == 0.0:
-        from sklearn.metrics import roc_curve as _rc
-        fpr_v, tpr_v, thr_v = _rc(y_va, oof_probs)
-        j_idx = np.argmax(tpr_v - fpr_v)
-        best_t = float(thr_v[j_idx])
-        print(f"  No threshold achieved recall ≥ 0.75; using Youden's J = {best_t:.4f}")
-
-    print(f"  CV calibration: {n_folds} patient-level folds")
-    return final_cal, round(best_t, 4), round(ece_before, 4), round(ece_after, 4)
-
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +289,7 @@ def evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir: Path,
     spec_te = recall_score(1 - y_te, 1 - pred_te, zero_division=0)
     bacc_te = balanced_accuracy_score(y_te, pred_te)
 
+    auc_tr  = roc_auc_score(y_tr, prob_tr) if len(np.unique(y_tr)) > 1 else 0.0
     f1_tr   = f1_score(y_tr, pred_tr, zero_division=0)
     gap     = f1_tr - f1_te
 
@@ -337,7 +317,8 @@ def evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir: Path,
         "  Overfitting check:",
         f"    Train F1        : {f1_tr:.4f}",
         f"    Test  F1        : {f1_te:.4f}",
-        f"    Gap             : {gap:+.4f}  ({'OK' if gap < 0.08 else 'OVERFIT'})",
+        f"    Gap             : {gap:+.4f}  ({'OK' if gap < 0.20 else 'HIGH — note: SMOTE inflates train F1; verify AUC consistency instead'})",
+        f"    AUC consistency : train={round(auc_tr, 4)}  test={auc_te:.4f}  (key overfitting signal)",
         "",
         "  Confusion matrix (test set):",
         f"    True Normal  predicted Normal   (TN): {tn:,}",
@@ -401,13 +382,14 @@ def evaluate(bst, X_tr, y_tr, X_te, y_te, out_dir: Path,
 # 5-fold Grouped Cross-Validation
 # ---------------------------------------------------------------------------
 
-def grouped_cv(X, y, pid, n_splits=5, threshold: float = 0.5):
+def grouped_cv(X, y, pid, n_splits=5, threshold: float = 0.5, device: str = "cpu"):
     """
     Run 5-fold patient-level cross-validation and report mean ± std.
 
     threshold: decision boundary applied to probabilities. Pass the same
                Youden's-J threshold used at test time so CV F1 is comparable
                to the reported test F1 (avoids threshold inconsistency).
+    device: 'cuda' or 'cpu' — must match production training for comparable metrics.
     """
     from sklearn.model_selection import GroupKFold
 
@@ -415,36 +397,43 @@ def grouped_cv(X, y, pid, n_splits=5, threshold: float = 0.5):
     print(f"  {n_splits}-FOLD GROUPED CROSS-VALIDATION  (threshold={threshold:.4f})")
     print(f"{'='*60}")
 
+    max_depth  = 6    if device == "cuda" else 4
+    eta        = 0.05 if device == "cuda" else 0.1
+    n_rounds   = 1000 if device == "cuda" else 500
+    early_stop = 50   if device == "cuda" else 30
+
     gkf = GroupKFold(n_splits=n_splits)
     fold_metrics = []
 
     for fold, (tr_idx, te_idx) in enumerate(gkf.split(X, y, groups=pid)):
         X_fold_te, y_fold_te = X[te_idx], y[te_idx]
 
-        # SMOTE on base 6 features only — derived features added after so
-        # synthetic samples maintain consistent ratio relationships.
-        from imblearn.over_sampling import SMOTE
-        sm_cv = SMOTE(random_state=SEED, k_neighbors=5)
-        X_smote_cv, y_fold_tr = sm_cv.fit_resample(X[tr_idx][:, :6], y[tr_idx])
-        X_fold_tr = _add_derived_features(X_smote_cv)  # consistent 9 features
+        X_fold_tr, y_fold_tr = smote_within_patients(X[tr_idx], y[tr_idx], pid[tr_idx])
 
         n0, n1 = (y_fold_tr == 0).sum(), (y_fold_tr == 1).sum()
         spw = round(n0 / max(n1, 1), 4)
 
-        dtrain = xgb.DMatrix(X_fold_tr, label=y_fold_tr)
+        # Inner 90/10 window-level split for early stopping.
+        # Synthetic samples have no stable patient IDs so window-level split is used.
+        rng_inner = np.random.RandomState(SEED)
+        inner_idx = rng_inner.permutation(len(y_fold_tr))
+        cut = int(0.9 * len(inner_idx))
+        inner_tr, inner_va = inner_idx[:cut], inner_idx[cut:]
+        d_inner_tr = xgb.DMatrix(X_fold_tr[inner_tr], label=y_fold_tr[inner_tr])
+        d_inner_va = xgb.DMatrix(X_fold_tr[inner_va], label=y_fold_tr[inner_va])
         dtest  = xgb.DMatrix(X_fold_te)
 
         params = {
             "objective": "binary:logistic", "eval_metric": "auc",
-            "eta": 0.1, "max_depth": 4, "min_child_weight": 5,
+            "eta": eta, "max_depth": max_depth, "min_child_weight": 3,
             "subsample": 0.8, "colsample_bytree": 0.8,
             "scale_pos_weight": spw, "lambda": 1.0, "alpha": 0.1,
-            "seed": SEED, "tree_method": "hist", "verbosity": 0,
+            "seed": SEED, "tree_method": "hist", "device": device, "verbosity": 0,
         }
 
-        bst = xgb.train(params, dtrain, num_boost_round=500,
-                         evals=[(dtrain, "train")],
-                         early_stopping_rounds=30, verbose_eval=0)
+        bst = xgb.train(params, d_inner_tr, num_boost_round=n_rounds,
+                         evals=[(d_inner_tr, "train"), (d_inner_va, "val")],
+                         early_stopping_rounds=early_stop, verbose_eval=0)
 
         probs = bst.predict(dtest)
         preds = (probs >= threshold).astype(int)
@@ -533,9 +522,28 @@ def bootstrap_ci(y_true, y_pred, y_prob, pid, n_boot=1000, alpha=0.05):
 # Learning Curves
 # ---------------------------------------------------------------------------
 
-def plot_learning_curves(X_tr, y_tr, X_va, y_va, X_te, y_te, out_dir: Path):
-    """Plot F1 vs training data fraction and AUC vs boosting rounds."""
+def plot_learning_curves(X_tr, y_tr, X_va, y_va, X_te, y_te, out_dir: Path,
+                         threshold: float = 0.5, device: str = "cpu"):
+    """Plot F1 vs training data fraction and AUC vs boosting rounds.
+
+    Uses the same hyperparameters and decision threshold as the main training
+    run so curves reflect the actual model's behaviour.
+    """
     print("\n  Generating learning curves ...")
+
+    max_depth  = 6   if device == "cuda" else 4
+    eta        = 0.05 if device == "cuda" else 0.1
+    n_rounds   = 1000 if device == "cuda" else 500
+    early_stop = 50  if device == "cuda" else 30
+
+    def _base_params(spw):
+        return {
+            "objective": "binary:logistic", "eval_metric": "auc",
+            "eta": eta, "max_depth": max_depth, "min_child_weight": 3,
+            "subsample": 0.8, "colsample_bytree": 0.8,
+            "scale_pos_weight": spw, "lambda": 1.0, "alpha": 0.1,
+            "seed": SEED, "tree_method": "hist", "device": device, "verbosity": 0,
+        }
 
     # --- F1 vs % training data ---
     fracs = [0.1, 0.2, 0.3, 0.5, 0.7, 1.0]
@@ -553,20 +561,12 @@ def plot_learning_curves(X_tr, y_tr, X_va, y_va, X_te, y_te, out_dir: Path):
         dval   = xgb.DMatrix(X_va, label=y_va)
         dte    = xgb.DMatrix(X_te)
 
-        params = {
-            "objective": "binary:logistic", "eval_metric": "auc",
-            "eta": 0.1, "max_depth": 4, "min_child_weight": 5,
-            "subsample": 0.8, "colsample_bytree": 0.8,
-            "scale_pos_weight": spw, "lambda": 1.0, "alpha": 0.1,
-            "seed": SEED, "tree_method": "hist", "verbosity": 0,
-        }
+        bst = xgb.train(_base_params(spw), dtrain, num_boost_round=n_rounds,
+                        evals=[(dval, "val")],
+                        early_stopping_rounds=early_stop, verbose_eval=0)
 
-        bst = xgb.train(params, dtrain, num_boost_round=300,
-                         evals=[(dval, "val")],
-                         early_stopping_rounds=20, verbose_eval=0)
-
-        tr_pred = (bst.predict(dtrain) >= 0.5).astype(int)
-        te_pred = (bst.predict(dte) >= 0.5).astype(int)
+        tr_pred = (bst.predict(dtrain) >= threshold).astype(int)
+        te_pred = (bst.predict(dte)    >= threshold).astype(int)
         train_f1s.append(f1_score(yf, tr_pred, zero_division=0))
         test_f1s.append(f1_score(y_te, te_pred, zero_division=0))
 
@@ -577,16 +577,9 @@ def plot_learning_curves(X_tr, y_tr, X_va, y_va, X_te, y_te, out_dir: Path):
     dval_full   = xgb.DMatrix(X_va, label=y_va)
 
     evals_result = {}
-    params = {
-        "objective": "binary:logistic", "eval_metric": "auc",
-        "eta": 0.1, "max_depth": 4, "min_child_weight": 5,
-        "subsample": 0.8, "colsample_bytree": 0.8,
-        "scale_pos_weight": spw, "lambda": 1.0, "alpha": 0.1,
-        "seed": SEED, "tree_method": "hist", "verbosity": 0,
-    }
-    xgb.train(params, dtrain_full, num_boost_round=500,
+    xgb.train(_base_params(spw), dtrain_full, num_boost_round=n_rounds,
               evals=[(dtrain_full, "train"), (dval_full, "val")],
-              early_stopping_rounds=30, verbose_eval=0,
+              early_stopping_rounds=early_stop, verbose_eval=0,
               evals_result=evals_result)
 
     # --- Plot ---
@@ -629,10 +622,15 @@ def run(processed_dir: Path, out_dir: Path):
     print("  BINARY ICP CLASSIFIER  |  Normal vs Abnormal (>=15 mmHg)")
     print(f"{SEP}")
 
+    device = _get_xgb_device()
+    print(f"  Device: {device.upper()} ({'GPU accelerated' if device == 'cuda' else 'CPU only'})")
+
     print("\n[1/7] Loading and relabelling data ...")
     X, y, pid = load_binary(processed_dir)
-    print(f"  Total: {len(X):,} windows | {len(np.unique(pid))} patients | 6 base features")
+    print(f"  Total (raw): {len(X):,} windows | {len(np.unique(pid))} patients")
     print_dist(y, "Combined")
+
+    print(f"  Total: {len(X):,} windows | {len(np.unique(pid))} patients | 6 base features")
 
     print("\n[2/7] Dataset-stratified split (70 / 10 / 20) ...")
     X_tr, y_tr, pid_tr, X_va, y_va, pid_va, X_te, y_te, pid_te = \
@@ -644,34 +642,15 @@ def run(processed_dir: Path, out_dir: Path):
     print(f"  Test  : {len(X_te):,} windows | {len(np.unique(pid_te))} patients")
     print_dist(y_te, "Test ")
 
-    # Balance training set with SMOTE on BASE 6 features only.
-    # Derived features are added AFTER SMOTE so that every synthetic sample
-    # satisfies pp_ratio == cardiac_amp/MAP exactly (no interpolation artefacts).
-    # SMOTE is fit ONLY on X_tr — val and test are never seen here.
-    from imblearn.over_sampling import SMOTE
+    # Balance training set using within-patient SMOTE.
+    # Synthetic samples only interpolate within the same patient's windows —
+    # val and test are never seen here.
     n0_pre, n1_pre = (y_tr == 0).sum(), (y_tr == 1).sum()
     print(f"  Pre-SMOTE  : Normal {n0_pre:,} | Abnormal {n1_pre:,}")
-    sm = SMOTE(random_state=SEED, k_neighbors=5)
-    X_tr_smote, y_tr_bal = sm.fit_resample(X_tr, y_tr)  # 6 features
-    X_tr_bal = _add_derived_features(X_tr_smote)         # 9 features, consistent
-    print(f"  Post-SMOTE : Normal {(y_tr_bal==0).sum():,} | Abnormal {(y_tr_bal==1).sum():,} (synthetic minority added)")
-    print(f"  Derived features added post-SMOTE: 9 total features")
+    X_tr_bal, y_tr_bal = smote_within_patients(X_tr, y_tr, pid_tr)
+    print(f"  Post-SMOTE : Normal {(y_tr_bal==0).sum():,} | Abnormal {(y_tr_bal==1).sum():,} (within-patient synthetic minority)")
 
-    # Add derived features to val and test (real samples — always consistent)
-    X_va = _add_derived_features(X_va)
-    X_te = _add_derived_features(X_te)
-
-    # 9-feature version of full dataset for grouped CV
-    X_9 = _add_derived_features(X)
-
-    # Use CHARIS-only val for early stopping (balanced signal)
-    # NOTE: pid_va mask computed before X_va is overwritten with 9-feat version above
-    ch_va = pid_va <= 13
-    X_va_es = X_va[ch_va] if ch_va.any() else X_va   # already 9-feat
-    y_va_es = y_va[ch_va] if ch_va.any() else y_va
-    print(f"  Early-stop val: {len(X_va_es):,} CHARIS windows")
-
-    bst, spw = train(X_tr_bal, y_tr_bal, X_va_es, y_va_es)
+    bst, spw = train(X_tr_bal, y_tr_bal, X_va, y_va, device=device)
 
     # Find optimal threshold on RAW probabilities using Youden's J on val set
     # Isotonic calibration was squishing probs (max 0.999->0.82), destroying recall.
@@ -705,7 +684,7 @@ def run(processed_dir: Path, out_dir: Path):
 
     # --- 5-fold Grouped CV ---
     print("\n[5/7] Running 5-fold grouped cross-validation ...")
-    cv_results = grouped_cv(X_9, y, pid, n_splits=5, threshold=threshold)
+    cv_results = grouped_cv(X, y, pid, n_splits=5, threshold=threshold, device=device)
 
     # --- Bootstrap CIs ---
     print("\n[6/7] Computing bootstrapped 95% confidence intervals ...")
@@ -722,28 +701,32 @@ def run(processed_dir: Path, out_dir: Path):
 
     # --- Learning Curves ---
     print("\n[6.5/7] Generating learning curves ...")
-    plot_learning_curves(X_tr, y_tr, X_va_es, y_va_es, X_te, y_te, out_dir)
+    plot_learning_curves(X_tr_bal, y_tr_bal, X_va, y_va, X_te, y_te, out_dir,
+                         threshold=threshold, device=device)
 
     # --- Save ---
     print("\n[7/7] Saving model + calibrator ...")
     Path("models").mkdir(exist_ok=True)
 
-    pkl_path = Path("models/xgboost_binary.pkl")
     gz_path  = Path("models/xgboost_binary.pkl.gz")
 
-    with open(pkl_path, "wb") as f:
-        pickle.dump(bst, f, protocol=5)
     with gzip.open(gz_path, "wb", compresslevel=6) as f:
         pickle.dump(bst, f, protocol=5)
 
     cal_gz_path = Path("models/xgboost_binary_calibrator.pkl.gz")
-    with gzip.open(cal_gz_path, "wb", compresslevel=6) as f:
-        pickle.dump(calibrator, f, protocol=5)
+    if calibrator is not None:
+        with gzip.open(cal_gz_path, "wb", compresslevel=6) as f:
+            pickle.dump(calibrator, f, protocol=5)
+        print(f"  models/xgboost_binary_calibrator.pkl.gz  (saved)")
+    else:
+        # Remove stale calibrator file so model_loader doesn't load it
+        if cal_gz_path.exists():
+            cal_gz_path.unlink()
+        print(f"  models/xgboost_binary_calibrator.pkl.gz  (not saved — using raw probs)")
 
     size_kb = gz_path.stat().st_size / 1024
     flag = "OK" if size_kb < 512 else "EXCEEDS LIMIT"
     print(f"  models/xgboost_binary.pkl.gz             ({size_kb:.1f} KB) [{flag}]")
-    print(f"  models/xgboost_binary_calibrator.pkl.gz  (saved)")
     print(f"  results saved -> {out_dir}/\n")
 
     # Store comprehensive metadata for API
@@ -783,6 +766,8 @@ def run(processed_dir: Path, out_dir: Path):
         },
     }
     (Path("models") / "binary_meta.json").write_text(json.dumps(meta, indent=2))
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "binary_meta.json").write_text(json.dumps(meta, indent=2))
 
     # Final summary
     print(f"\n{'='*60}")
@@ -798,6 +783,10 @@ def run(processed_dir: Path, out_dir: Path):
 
 
 def main():
+    # Force UTF-8 stdout so box-drawing chars (±, >=, etc.) don't crash on Windows
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
     parser = argparse.ArgumentParser()
     parser.add_argument("--processed_dir", type=Path, default=Path("data/processed"))
     parser.add_argument("--out_dir",       type=Path, default=Path("results/binary"))

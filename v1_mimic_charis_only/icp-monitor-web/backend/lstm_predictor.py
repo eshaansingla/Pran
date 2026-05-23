@@ -59,6 +59,15 @@ def _try_load() -> None:
         from tensorflow.keras.models import load_model
 
         _model      = load_model(str(model_path), compile=False)
+        # Guard: reject models trained on wrong number of features
+        expected_features = _model.input_shape[-1]
+        if expected_features != 6:
+            _load_error = (
+                f"LSTM trained with {expected_features} features, expected 6. "
+                "Retrain with lstm_forecaster.py using the 6-feature pipeline."
+            )
+            _model = None
+            return
         if attn_path.exists():
             _attn_model = load_model(str(attn_path), compile=False)
         if meta_path.exists():

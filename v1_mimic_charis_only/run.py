@@ -16,6 +16,9 @@ Ctrl+C stops everything cleanly.
 import subprocess
 import sys
 import time
+
+if sys.stdout.encoding and sys.stdout.encoding.lower() != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
 import socket
 import threading
 import webbrowser
