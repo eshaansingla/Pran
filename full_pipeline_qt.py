@@ -52,13 +52,8 @@ CACHE_Y   = Path("results/audit/cache/y.npy")
 CACHE_PID = Path("results/audit/cache/pid.npy")
 MODEL_DIR = Path("models")
 OUT_DIR   = Path("results/qt_pipeline")
-HW_CSVS   = [
-    Path("hw-tests/icp_1_27min.csv"),
-    Path("hw-tests/icp_2.csv"),
-    Path("hw-tests/icp_3.csv"),
-    Path("hw-tests/icp_4.csv"),
-]
-HW_META = {
+HW_DIR  = Path("hw-tests")   # all *.csv files here are auto-tested
+HW_META = {                  # optional per-file metadata; unknown files get auto-filled
     "icp_1_27min.csv": {"label": "Subject 1", "age": "19-21", "profile": "Healthy young adult"},
     "icp_2.csv":       {"label": "Subject 2", "age": "19-21", "profile": "Healthy young adult"},
     "icp_3.csv":       {"label": "Subject 3", "age": "65-75", "profile": "Elderly adult"},
@@ -348,10 +343,11 @@ def run_hw_test(bst, qt, thr, X_charis):
     charis_qt = qt.transform(X_charis)
     hw_results = {}
 
-    for csv_path in HW_CSVS:
-        if not csv_path.exists():
-            print(f"  SKIP: {csv_path} not found"); continue
+    hw_csvs = sorted(HW_DIR.glob("*.csv")) if HW_DIR.exists() else []
+    if not hw_csvs:
+        print(f"  No CSV files found in {HW_DIR}/"); return {}
 
+    for csv_path in hw_csvs:
         meta  = HW_META.get(csv_path.name, {"label": csv_path.stem, "age": "?", "profile": "Unknown"})
         X_hw, sessions = load_hw_csv(csv_path)
 
@@ -578,9 +574,11 @@ def main():
     for fname, r in hw_results.items():
         print(f"  {r['subject']:<12} {r['age']:>8} {r['profile']:<38} "
               f"{r['pct_flagged']:>8.1f}%  {r['mean_prob']:>8.4f}")
-    print(f"\n  Key Finding: Model shows monotonic increase in ICP anomaly probability")
-    print(f"  from healthy young adults (6-8%) to elderly with haemorrhage history (65%),")
-    print(f"  consistent with known age-related and pathological ICP physiology.")
+    if hw_results:
+        min_sub = min(hw_results.values(), key=lambda r: r["pct_flagged"])
+        max_sub = max(hw_results.values(), key=lambda r: r["pct_flagged"])
+        print(f"\n  Range: {min_sub['subject']} ({min_sub['pct_flagged']:.1f}% flagged) "
+              f"→ {max_sub['subject']} ({max_sub['pct_flagged']:.1f}% flagged)")
     print(f"\n  Results -> {OUT_DIR}/qt_results.json")
     print(f"  Plot    -> {OUT_DIR}/qt_pipeline_results.png")
     print(SEP)
