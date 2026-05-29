@@ -19,7 +19,7 @@ Run
     cd "C:\\Users\\asus\\Documents\\GitHub\\Pran"; python full_pipeline_qt.py
 """
 from __future__ import annotations
-import json, sys, warnings
+import json, re, sys, warnings
 from datetime import date
 from pathlib import Path
 
@@ -53,12 +53,27 @@ CACHE_PID = Path("results/audit/cache/pid.npy")
 MODEL_DIR = Path("models")
 OUT_DIR   = Path("results/qt_pipeline")
 HW_DIR  = Path("hw-tests")   # all *.csv files here are auto-tested
-HW_META = {                  # optional per-file metadata; unknown files get auto-filled
-    "icp_1_27min.csv": {"label": "Subject 1", "age": "19-21", "profile": "Healthy young adult"},
-    "icp_2.csv":       {"label": "Subject 2", "age": "19-21", "profile": "Healthy young adult"},
-    "icp_3.csv":       {"label": "Subject 3", "age": "65-75", "profile": "Elderly adult"},
-    "icp_4.csv":       {"label": "Subject 4", "age": "65-75", "profile": "Elderly adult, prior haemorrhage"},
+HW_META = {                  # override metadata for specific files (comorbidities, notes, etc.)
+    "icp_1_27min.csv": {"label": "Subject 1",  "age": "19-21", "gender": "?", "profile": "Healthy young adult"},
+    "icp_2.csv":       {"label": "Subject 2",  "age": "19-21", "gender": "?", "profile": "Healthy young adult"},
+    "icp_3.csv":       {"label": "Subject 3",  "age": "65-75", "gender": "?", "profile": "Elderly adult"},
+    "icp_4.csv":       {"label": "Subject 4",  "age": "65-75", "gender": "?", "profile": "Elderly adult, prior haemorrhage"},
+    "icp_5.csv":       {"label": "Subject 5",  "age": "?",     "gender": "?", "profile": "Unknown"},
+    "icp_11_72_F.csv": {"label": "Subject 11", "age": "72",    "gender": "F", "profile": "Female | Hypertension/Diabetes (unconfirmed which)"},
+    "icp_12_75_M.csv": {"label": "Subject 12", "age": "75",    "gender": "M", "profile": "Male   | Hypertension/Diabetes (unconfirmed which)"},
 }
+
+
+def parse_hw_meta(path: Path) -> dict:
+    """HW_META takes priority; otherwise parse icp_{num}_{age}_{gender}.csv automatically."""
+    if path.name in HW_META:
+        return HW_META[path.name]
+    m = re.match(r"icp_(\d+)_(\d+)_([MF])$", path.stem, re.IGNORECASE)
+    if m:
+        num, age, gender = m.group(1), m.group(2), m.group(3).upper()
+        return {"label": f"Subject {num}", "age": age, "gender": gender,
+                "profile": "Male" if gender == "M" else "Female"}
+    return {"label": path.stem, "age": "?", "gender": "?", "profile": "Unknown"}
 
 FEATURES = ["cardiac_amplitude", "cardiac_frequency", "respiratory_amplitude",
             "slow_wave_power", "cardiac_power"]
@@ -348,7 +363,7 @@ def run_hw_test(bst, qt, thr, X_charis):
         print(f"  No CSV files found in {HW_DIR}/"); return {}
 
     for csv_path in hw_csvs:
-        meta  = HW_META.get(csv_path.name, {"label": csv_path.stem, "age": "?", "profile": "Unknown"})
+        meta  = parse_hw_meta(csv_path)
         X_hw, sessions = load_hw_csv(csv_path)
 
         # Apply QT (same QT fitted on CHARIS training split)
@@ -366,8 +381,9 @@ def run_hw_test(bst, qt, thr, X_charis):
         preds = (probs >= thr).astype(int)
         pct   = 100 * preds.mean()
 
+        gender_str = f"  |  {meta['gender']}" if meta.get("gender", "?") != "?" else ""
         print(f"\n{SEP}")
-        print(f"  {meta['label']}  |  Age: {meta['age']}  |  {meta['profile']}")
+        print(f"  {meta['label']}  |  Age: {meta['age']}{gender_str}  |  {meta['profile']}")
         print(SEP)
         print(f"  Windows analysed  : {len(probs):,}")
         print(f"  Mean P(ICP anomaly): {probs.mean():.4f}  (threshold: {thr:.4f})")
@@ -394,7 +410,11 @@ def run_hw_test(bst, qt, thr, X_charis):
                     "mean_prob": round(float(mean_p),4),
                 }
 
-        # Clinical interpretation
+        # Clinical interpretation — profile-aware
+        profile_low = meta["profile"].lower()
+        has_haemorrhage = "haemorrhage" in profile_low or "hemorrhage" in profile_low
+        has_comorbidity = any(x in profile_low for x in ["hypertension", "diabetes", "htn", "dm"])
+
         print(f"\n  Clinical Interpretation:")
         if pct < 10:
             v = "Normal ICP profile -- consistent with healthy subject"
@@ -406,13 +426,19 @@ def run_hw_test(bst, qt, thr, X_charis):
             v = "Moderately elevated ICP signals -- age-related or subclinical changes detected"
             interp = "Elevation consistent with reduced cerebrovascular compliance in elderly subjects."
         else:
-            v = "Significantly elevated ICP signals -- pathological profile detected"
-            interp = "Strong ICP anomaly signal consistent with known haemorrhagic history and altered TM-ICP coupling."
+            v = "Significantly elevated ICP signals -- altered cerebrovascular compliance detected"
+            if has_haemorrhage:
+                interp = "Strong ICP anomaly signal consistent with known haemorrhagic history and altered TM-ICP coupling."
+            elif has_comorbidity:
+                interp = "Elevated signal consistent with hypertension/diabetes-related cerebrovascular remodelling and reduced compliance."
+            else:
+                interp = "Elevated signal consistent with age-related reduction in cerebrovascular compliance and ICP dynamics."
         print(f"  {v}")
         print(f"  {interp}")
 
         hw_results[csv_path.name] = {
-            "subject": meta["label"], "age": meta["age"], "profile": meta["profile"],
+            "subject": meta["label"], "age": meta["age"],
+            "gender": meta.get("gender", "?"), "profile": meta["profile"],
             "n_windows": len(probs), "mean_prob": round(float(probs.mean()),4),
             "pct_flagged": round(float(pct),2),
             "kl_divergence": kl_vals, "verdict": v,
@@ -569,11 +595,11 @@ def main():
     print(f"  LOPO F1           : {lopo_m['f1_mean']:.4f} +/- {lopo_m['f1_std']:.4f}  "
           f"95%CI [{lopo_m['f1_ci'][0]:.4f}, {lopo_m['f1_ci'][1]:.4f}]")
     print(f"\n  Hardware Validation Summary:")
-    print(f"  {'Subject':<12} {'Age':>8} {'Profile':<38} {'Flagged%':>9} {'Mean P':>8}")
-    print(f"  {'-'*80}")
+    print(f"  {'Subject':<12} {'Age':>5} {'Sex':>4}  {'Profile':<44} {'Flagged%':>9} {'Mean P':>8}")
+    print(f"  {'-'*90}")
     for fname, r in hw_results.items():
-        print(f"  {r['subject']:<12} {r['age']:>8} {r['profile']:<38} "
-              f"{r['pct_flagged']:>8.1f}%  {r['mean_prob']:>8.4f}")
+        print(f"  {r['subject']:<12} {r['age']:>5} {r.get('gender','?'):>4}  "
+              f"{r['profile']:<44} {r['pct_flagged']:>8.1f}%  {r['mean_prob']:>8.4f}")
     if hw_results:
         min_sub = min(hw_results.values(), key=lambda r: r["pct_flagged"])
         max_sub = max(hw_results.values(), key=lambda r: r["pct_flagged"])
