@@ -469,25 +469,4 @@ ICP features are highly skewed (most windows have low cardiac amplitude; patholo
 | BiLSTM tested on CPU only | Long training time | GPU cluster / Google Colab |
 
 ---
-
-## Citation
-
-```bibtex
-@misc{singla2026noninvasive,
-  title   = {Non-Invasive Intracranial Pressure Monitoring via Tympanic Membrane Optical Sensing},
-  author  = {Singla, Eshaan and others},
-  year    = {2026},
-  school  = {Thapar Institute of Engineering and Technology},
-  note    = {Capstone Project}
-}
-```
-
----
-
-<div align="center">
-
-**Built at Thapar Institute of Engineering and Technology**
-
-*If this work is useful, please star the repo and cite the papers when published.*
-
 </div>
