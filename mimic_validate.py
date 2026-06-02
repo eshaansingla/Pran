@@ -15,6 +15,7 @@ import xgboost as xgb
 import pywt
 from scipy import signal as sp_signal
 from scipy.stats import pearsonr, spearmanr
+from sklearn.metrics import roc_auc_score, f1_score, confusion_matrix
 
 # ── constants (must match regen_cache.py exactly) ─────────────────────────────
 FS, WIN, STEP = 50, 500, 250
@@ -172,9 +173,27 @@ print(f"\n  Total windows : {len(X):,}  |  Patients: {found}")
 r_p,  pv_p  = pearsonr(IC, P)
 r_sp, pv_sp = spearmanr(IC, P)
 low  = P[IC <  THRESH]; high = P[IC >= THRESH]
+y_bin = (IC >= THRESH).astype(int)
+
+# ── Classification metrics ─────────────────────────────────────────────────
+_thr_path = Path("models/xgb_qt_thr.pkl")
+if _thr_path.exists():
+    import pickle as _pkl
+    _thr_val, _ = _pkl.load(open(_thr_path, "rb"))
+else:
+    _thr_val = 0.5
+pred_bin = (P >= _thr_val).astype(int)
+
+mimic_auc = roc_auc_score(y_bin, P) if y_bin.sum() > 0 and (1-y_bin).sum() > 0 else float("nan")
+mimic_acc = float((pred_bin == y_bin).mean())
+mimic_f1  = f1_score(y_bin, pred_bin, zero_division=0)
+cm_m      = confusion_matrix(y_bin, pred_bin)
 
 print(f"\n  Pearson r     : {r_p:+.4f}  (p={pv_p:.2e})")
 print(f"  Spearman rho  : {r_sp:+.4f}  (p={pv_sp:.2e})")
+print(f"\n  AUC           : {mimic_auc:.4f}")
+print(f"  Accuracy      : {mimic_acc:.4f}  (threshold={_thr_val:.4f})")
+print(f"  F1            : {mimic_f1:.4f}")
 print(f"\n  Mean P | ICP <  20 mmHg : {low.mean():.4f}  (n={len(low):,})")
 print(f"  Mean P | ICP >= 20 mmHg : {high.mean():.4f}  (n={len(high):,})")
 print(f"  Separation : {high.mean()-low.mean():+.4f}  "
