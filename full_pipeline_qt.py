@@ -128,7 +128,11 @@ def extract_hw_window(ir: np.ndarray, disp: np.ndarray) -> np.ndarray | None:
 
 
 def load_hw_csv(path: Path):
-    df = pd.read_csv(path, comment="#")
+    df = pd.read_csv(path, comment="#", low_memory=False)
+    required = {"ir_raw", "disp_raw", "artifact_flag"}
+    if not required.issubset(df.columns):
+        print(f"  [skip] {path.name} — missing columns")
+        return np.empty((0, len(FEATURES)), dtype=np.float32), np.empty(0, dtype=np.int32)
     df = df[df["artifact_flag"] == 0].reset_index(drop=True)
     has_sess = "session_label" in df.columns
     feats, sessions = [], []
@@ -141,6 +145,8 @@ def load_hw_csv(path: Path):
         if feat is None: continue
         feats.append(feat)
         sessions.append(int(sl["session_label"].mode()[0]) if has_sess else 0)
+    if not feats:
+        return np.empty((0, len(FEATURES)), dtype=np.float32), np.empty(0, dtype=np.int32)
     return np.array(feats, dtype=np.float32), np.array(sessions, dtype=np.int32)
 
 
@@ -688,6 +694,9 @@ def run_hw_test(bst, qt, thr, X_charis):
     for csv_path in hw_csvs:
         meta  = parse_hw_meta(csv_path)
         X_hw, sessions = load_hw_csv(csv_path)
+
+        if len(X_hw) == 0:
+            continue
 
         # Apply QT (same QT fitted on CHARIS training split)
         X_hw_qt = qt.transform(X_hw).astype(np.float32)
