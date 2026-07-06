@@ -278,8 +278,22 @@ sequenceDiagram
 
 ### Hardware dataset detail
 
-- **50 subjects**, ages 8–83 (mostly healthy volunteers).
+- **50 subjects**, ages 8–83 (median 21), 32 M / 18 F — mostly healthy volunteers.
 - **4 sessions** per subject — see the provocation protocol in [§8](#8-data-preprocessing).
+
+**Age-group distribution** (derived from subject metadata):
+
+| Age band | N | Ages |
+|---|---|---|
+| Children (< 13) | 3 | 8, 10, 12 |
+| Adolescents (13–18) | 5 | 13, 16, 17, 17, 18 |
+| Young adults (19–25) | 20 | 19–22 |
+| Adults (26–45) | 10 | 26–42 |
+| Middle-aged (46–64) | 7 | 47–55 |
+| Elderly (65+) | 5 | 72, 75, 75, 79, 83 |
+| **Total** | **50** | **8–83** |
+
+The 3 CHARIS-flagged-abnormal subjects are all in the older bands (ages 72, 75, 83), consistent with reduced intracranial compliance at higher age.
 - **Labels for the hybrid model** are assigned by the CHARIS foundation model (`flag_hw.py`): a subject is flagged *abnormal* when its mean P(ICP) exceeds the CHARIS threshold (0.2953). **3 subjects** were flagged abnormal (e.g. `icp_4_83_M`, mean 0.48 — an 83-year-old with prior haemorrhage), **47 normal**.
 - Class ratio (abnormal:normal windows) ≈ **0.86 : 1** → handled by `scale_pos_weight`, **no SMOTE**.
 
