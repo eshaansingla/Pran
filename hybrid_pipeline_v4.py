@@ -53,7 +53,8 @@ import pandas as pd
 import pywt
 import xgboost as xgb
 from scipy import signal as sp_signal
-from scipy.stats import wilcoxon as _wilcoxon, norm as _norm, mannwhitneyu
+from scipy.stats import (wilcoxon as _wilcoxon, norm as _norm, mannwhitneyu,
+                         friedmanchisquare, spearmanr)
 from sklearn.calibration import CalibratedClassifierCV
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
@@ -522,6 +523,127 @@ def valsalva_analysis(records):
             "wilcoxon_p": round(float(pval), 6)}
 
 
+# ── Dose-response analysis (within-subject ICP modulation ladder) ─────────────
+# Physiologically-expected ICP ordering (low -> high):
+#   head-up 30 (sess 1)  <  supine (sess 0)  <  head-down 10 (sess 2)  <  valsalva (sess 3)
+# Each subject is their own control -> auto-controls age / heart-rate confounds.
+SESSION_ICP_RANK = {1: 0, 0: 1, 2: 2, 3: 3}   # session_label -> expected ICP rank
+SESSION_NAME     = {1: "head-up-30", 0: "supine", 2: "head-down-10", 3: "valsalva"}
+ORDERED_SESSIONS = [1, 0, 2, 3]               # ascending expected ICP
+
+
+def dose_response_analysis(records):
+    """
+    Within-subject graded ICP-modulation test.
+    Returns per-session means, Friedman omnibus, adjacent-pair Wilcoxon,
+    monotonicity fraction, and mean within-subject Spearman(rank, output).
+    """
+    # subject x session mean-probability matrix (only subjects with all 4 sessions)
+    rows, spearmans, mono_hits = [], [], 0
+    for r in records:
+        sess = np.array(r["sessions"]); prob = np.array(r["probs"])
+        per = {s: float(prob[sess == s].mean()) for s in ORDERED_SESSIONS
+               if (sess == s).sum() > 0}
+        if len(per) < 4:
+            continue
+        vec = [per[s] for s in ORDERED_SESSIONS]         # in ascending-ICP order
+        rows.append(vec)
+        # within-subject Spearman between expected rank (0..3) and model output
+        rho, _ = spearmanr([0, 1, 2, 3], vec)
+        if not np.isnan(rho):
+            spearmans.append(float(rho))
+        # strict monotonic increase across the ladder
+        if all(vec[i] < vec[i + 1] for i in range(3)):
+            mono_hits += 1
+
+    if len(rows) < 4:
+        print("\n  Dose-response: insufficient subjects with all 4 sessions")
+        return {}
+
+    M = np.array(rows)                                   # (n_subj, 4)
+    n = len(M)
+
+    # Friedman omnibus across the 4 conditions (repeated measures)
+    fr_stat, fr_p = friedmanchisquare(*[M[:, i] for i in range(4)])
+
+    # Adjacent-pair one-tailed Wilcoxon (each step should raise output)
+    pair_results = []
+    for i in range(3):
+        lo, hi = ORDERED_SESSIONS[i], ORDERED_SESSIONS[i + 1]
+        try:
+            _, p = _wilcoxon(M[:, i + 1], M[:, i], alternative="greater")
+        except ValueError:
+            p = float("nan")
+        pair_results.append((SESSION_NAME[lo], SESSION_NAME[hi],
+                             float(M[:, i].mean()), float(M[:, i + 1].mean()), float(p)))
+
+    mean_rho = float(np.mean(spearmans)) if spearmans else float("nan")
+    mono_pct = 100.0 * mono_hits / n
+
+    # ── 3-level ladder: drop head-up (smallest, ambiguous ICP delta) ──
+    # supine (0) < head-down (2) < valsalva (3) — the three conditions with
+    # clear physiological separation. Cleaner headline monotonicity number.
+    THREE = [0, 2, 3]
+    three_hits, three_rho = 0, []
+    for r in records:
+        sess = np.array(r["sessions"]); prob = np.array(r["probs"])
+        per = {s: float(prob[sess == s].mean()) for s in THREE if (sess == s).sum() > 0}
+        if len(per) < 3:
+            continue
+        vec3 = [per[s] for s in THREE]
+        rho3, _ = spearmanr([0, 1, 2], vec3)
+        if not np.isnan(rho3):
+            three_rho.append(float(rho3))
+        if vec3[0] < vec3[1] < vec3[2]:
+            three_hits += 1
+    n3        = len(three_rho)
+    three_pct = 100.0 * three_hits / n3 if n3 else float("nan")
+    mean_rho3 = float(np.mean(three_rho)) if three_rho else float("nan")
+
+    fsig = "***" if fr_p < 0.001 else ("**" if fr_p < 0.01 else ("*" if fr_p < 0.05 else "ns"))
+    print(f"\n{SEP}")
+    print("  DOSE-RESPONSE ANALYSIS  (within-subject ICP ladder)")
+    print(SEP)
+    print(f"  Subjects with all 4 sessions : {n}")
+    print(f"  Expected ICP order (low->high): head-up < supine < head-down < valsalva")
+    print(f"\n  {'Session':<14} {'Mean P(ICP)':>12}")
+    print(f"  {'-'*28}")
+    for s in ORDERED_SESSIONS:
+        col = ORDERED_SESSIONS.index(s)
+        print(f"  {SESSION_NAME[s]:<14} {M[:, col].mean():>12.4f}")
+    print(f"\n  Friedman omnibus     : chi2={fr_stat:.2f}  p={fr_p:.6f}  {fsig}")
+    print(f"  Mean within-subj rho : {mean_rho:+.3f}   (Spearman rank vs output)")
+    print(f"  Monotonic subjects   : {mono_hits}/{n}  ({mono_pct:.0f}%)")
+    print(f"\n  Adjacent-step Wilcoxon (one-tailed, each step should raise output):")
+    for lo, hi, m_lo, m_hi, p in pair_results:
+        s = "***" if p < 0.001 else ("**" if p < 0.01 else ("*" if p < 0.05 else "ns"))
+        print(f"    {lo:>12} -> {hi:<12} : {m_lo:.4f} -> {m_hi:.4f}  p={p:.5f}  {s}")
+    print(f"\n  3-level ladder (supine < head-down < valsalva; head-up dropped):")
+    print(f"    Monotonic subjects : {three_hits}/{n3}  ({three_pct:.0f}%)")
+    print(f"    Mean within-subj rho: {mean_rho3:+.3f}")
+    print(SEP)
+
+    return {
+        "n_subjects": n,
+        "session_means": {SESSION_NAME[s]: round(float(M[:, ORDERED_SESSIONS.index(s)].mean()), 4)
+                          for s in ORDERED_SESSIONS},
+        "friedman_chi2": round(float(fr_stat), 3),
+        "friedman_p":    round(float(fr_p), 6),
+        "mean_within_subject_spearman": round(mean_rho, 3),
+        "monotonic_fraction": round(mono_pct / 100.0, 3),
+        "adjacent_pairs": [{"from": lo, "to": hi,
+                            "mean_from": round(m_lo, 4), "mean_to": round(m_hi, 4),
+                            "wilcoxon_p": round(p, 6)}
+                           for lo, hi, m_lo, m_hi, p in pair_results],
+        "three_level": {
+            "conditions": ["supine", "head-down-10", "valsalva"],
+            "n_subjects": n3,
+            "monotonic_fraction": round(three_pct / 100.0, 3) if not np.isnan(three_pct) else None,
+            "mean_within_subject_spearman": round(mean_rho3, 3) if not np.isnan(mean_rho3) else None,
+        },
+    }
+
+
 # ── Baselines LOPO (pooled) ────────────────────────────────────────────────────
 def run_baselines_lopo(hw_X, hw_y, hw_pid, c_X, c_y):
     from sklearn.base import clone
@@ -743,8 +865,12 @@ def main():
                        c_X_sel, c_y_sel, device, names)
     lopo_stats = pooled_lopo_stats(records)
 
-    # [8] Valsalva
-    val_stats = valsalva_analysis(records)
+    # Persist raw per-window LOPO records so dose-response / re-analysis needs no re-run
+    pickle.dump(records, open(OUT_DIR / "lopo_records.pkl", "wb"))
+
+    # [8] Valsalva  +  within-subject dose-response ladder
+    val_stats  = valsalva_analysis(records)
+    dose_stats = dose_response_analysis(records)
 
     # [9] Baselines
     bl_stats, bl_pool = run_baselines_lopo(hw_X, hw_y, hw_pid, c_X_sel, c_y_sel)
@@ -800,6 +926,7 @@ def main():
         "test_metrics": test_m,
         "lopo_eval": lopo_stats,
         "valsalva_stats": val_stats,
+        "dose_response": dose_stats,
         "baselines": bl_stats,
         "feature_ablation": ablation,
         "feature_importance": feat_imp,

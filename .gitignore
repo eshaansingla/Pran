@@ -1,13 +1,23 @@
-# Data and models (large files, not for repo)
+# ── Large data & generated artifacts (not for repo) ──────────────────────────
+# raw + processed CHARIS/MIMIC arrays (large, credentialed)
 data/
+# trained model binaries + per-fold caches
 models/
+# generated result JSONs and plots
 results/
 
-# Logs
+# ── Raw human-subject recordings (privacy — keep OUT of the repo) ─────────────
+hw-tests/
+icp_session_*.csv
+
+# ── Manuscript (kept local until the 100-subject version is finalized) ───────
+paper/
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
 logs/
 *.log
 
-# Python
+# ── Python ───────────────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
@@ -19,21 +29,22 @@ build/
 .venv/
 venv/
 env/
+.pytest_cache/
 
-# Claude Code memory
+# ── Editor / tooling ─────────────────────────────────────────────────────────
 .claude/
+_dup/
+prof_justification.tex
 
-# Environment
+# ── Environment / secrets ────────────────────────────────────────────────────
 .env
 *.env.local
 
-# OS
+# ── OS ───────────────────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 
-# Node
+# ── Node ─────────────────────────────────────────────────────────────────────
 node_modules/
-icp_session_20260411_230328.csv
-prof_justification.tex
-_dup/
-hw-tests/
+
+# NOTE: assets/ IS tracked (README showcase figures). paper/ stays local for now.
