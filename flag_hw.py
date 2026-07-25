@@ -35,6 +35,7 @@ MODEL    = Path("models/xgb_qt.json")
 QT_PKL   = Path("models/qt_scaler.pkl")
 RESULTS  = Path("results/qt_pipeline/qt_results.json")
 OUT      = Path("results/hw_charis_flags.json")
+REC_OUT  = Path("results/hw_charis_records.pkl")  # per-window probs+sessions for dose-response
 FEATURES = ["cardiac_amplitude", "cardiac_frequency", "respiratory_amplitude",
             "slow_wave_power", "cardiac_power"]
 
@@ -75,6 +76,7 @@ def main():
     print("-" * 62)
 
     flags = {}
+    records = []   # per-window probs + sessions per subject (pure-CHARIS model on HW)
     for csv_path in sorted(HW_DIR.glob("*.csv")):
         df = pd.read_csv(csv_path, comment="#", low_memory=False)
         required = {"ir_raw", "disp_raw", "artifact_flag", "session_label"}
@@ -108,6 +110,11 @@ def main():
                                 "frac_above_thr": round(frac_abn, 4),
                                 "n_windows": len(probs),
                                 "per_session": sess_info}
+        records.append({"name": csv_path.name,
+                        "true_label": int(is_flagged),
+                        "probs": probs.tolist(),
+                        "sessions": sess.tolist(),
+                        "mean_prob": round(mean_p, 4)})
         mark = "  <<< ABNORMAL" if is_flagged else ""
         print(f"{csv_path.name:<24} {len(probs):>7} {mean_p:>8.4f} "
               f"{frac_abn:>9.3f} {str(is_flagged):>8}{mark}")
@@ -123,6 +130,8 @@ def main():
                "n_total": len(flags), "patients": flags},
               open(OUT, "w"), indent=2)
     print(f"Saved -> {OUT}")
+    pickle.dump(records, open(REC_OUT, "wb"))
+    print(f"Saved -> {REC_OUT}  ({len(records)} subject records)")
 
 
 if __name__ == "__main__":
