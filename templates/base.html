@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Pran{% endblock %} · Pran</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <div class="brand">Pran<small>optical eardrum sensor · state recognition</small></div>
+      <nav>
+        <a href="/" class="{{ 'active' if page == 'analyse' }}">Analyse</a>
+        <a href="/results" class="{{ 'active' if page == 'results' }}">Results</a>
+        <a href="/about" class="{{ 'active' if page == 'about' }}">About</a>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap">
+    {% block content %}{% endblock %}
+    <footer>
+      Research prototype. Recognises the recorded physiological state (Valsalva, posture) from optical features.
+      Not an ICP measurement, not calibrated to mmHg, not a diagnosis, and not a medical device.
+    </footer>
+  </main>
+</body>
+</html>

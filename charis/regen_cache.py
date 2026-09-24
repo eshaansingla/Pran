@@ -15,7 +15,7 @@ FS, WIN, STEP = 50, 500, 250
 THRESH, LABEL_FRAC = 20.0, 0.60
 ICP_CH = {"ICP", "ICP1", "ICP2", "ICPC"}
 
-CHARIS_DIR = Path("C:/Users/asus/Documents/GitHub/Pran/data/raw/charis")
+CHARIS_DIR = Path("data/raw/charis")
 CACHE      = Path("results/audit/cache")
 
 _nyq = FS / 2.0

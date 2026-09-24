@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}About{% endblock %}
+{% block content %}
+<h1>About</h1>
+<p class="sub">A low-cost optical eardrum sensor and two models: a clinical model on public data, and a hardware model for our own recordings.</p>
+
+<div class="card">
+  <h2>The idea</h2>
+  <p>Intracranial pressure (ICP) is normally measured with a probe through the skull. The eardrum is coupled to the fluid around the brain through the inner ear,
+     so an optical sensor at the eardrum may respond when ICP changes. We tested what a low-cost version of that can and cannot show.</p>
+</div>
+
+<div class="card plain">
+  <h2>Data</h2>
+  <ul class="tight">
+    <li><b>CHARIS</b> (PhysioNet, public): 13 brain-injury patients, invasive ICP, 915,137 ten-second windows.</li>
+    <li><b>Our hardware recordings:</b> 146 volunteers (ages 7 to 83, median 21; 107 male, 39 female), four sessions each in a fixed order:
+        supine, head-up 30°, head-down 10°, Valsalva. 46,407 windows at 50 Hz. Sensor: ESP32 with an infrared optical sensor, a 16-bit ADC and a motion sensor.</li>
+  </ul>
+</div>
+
+<div class="card plain">
+  <h2>Method</h2>
+  <ul class="tight">
+    <li>Artefact-flagged rows removed, 10-second windows with 50% overlap, flat windows dropped, detrended.</li>
+    <li>Hardware model: 32 optical features from the IR, displacement and red channels (the motion sensor is not used), XGBoost, trained on the recorded manoeuvre labels.</li>
+    <li>Every metric uses unseen subjects; thresholds are chosen on separate validation subjects.</li>
+  </ul>
+</div>
+
+<div class="card plain">
+  <h2>Limits</h2>
+  <ul class="tight">
+    <li>The hardware model recognises the recorded state; it is not an ICP measurement, is not calibrated to mmHg, and there are no patients with raised ICP in the hardware data.</li>
+    <li>Manoeuvre order was fixed. Checks against slow drift and body movement are on the Results page, but a randomised order would settle it.</li>
+    <li>IR and red channels alone each carry most of the signal, so systemic blood-flow changes with posture and straining are part of what is recognised.</li>
+    <li>The Valsalva block in each recording is several minutes long, while a single Valsalva effort lasts seconds, so some windows labelled Valsalva may be rest.</li>
+    <li>The CHARIS model does not transfer to the hardware after five alignment attempts.</li>
+  </ul>
+</div>
+
+<div class="card plain">
+  <h2>References</h2>
+  <ul class="tight">
+    <li>Prabhakar H, Bithal PK, Suri A, Rath GP, Dash HH. Intracranial pressure changes during Valsalva manoeuvre in patients undergoing a neuroendoscopic procedure. <i>Minim Invasive Neurosurg</i>, 2007. PMID 17674296.</li>
+    <li>Dhar R, Sandler RH, Manwaring K, Kostick N, Mansy HA. Noninvasive detection of elevated ICP using spontaneous tympanic membrane pulsation. <i>Sci Rep</i> 2021;11:21957.</li>
+    <li>Gwer S, Sheward V, Birch A, et al. The tympanic membrane displacement analyser for monitoring intracranial pressure in children. <i>Childs Nerv Syst</i> 2013;29:927-933.</li>
+  </ul>
+</div>
+{% endblock %}

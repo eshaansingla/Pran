@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Report{% endblock %}
+{% block content %}
+{% if not r.ok %}
+  <h1>Could not analyse this recording</h1>
+  <div class="err">{{ r.error }}</div>
+  <p><a href="/">Back</a></p>
+{% else %}
+  <h1>Report: {{ r.name }}</h1>
+  <div class="kv">
+    {% if r.info %}<span>Subject <b>{{ r.info.subject }}</b></span><span>Age <b>{{ r.info.age }}</b></span><span>Sex <b>{{ r.info.sex }}</b></span>{% endif %}
+    <span>Windows <b>{{ r.n_windows }}</b> (about {{ r.minutes }} min)</span>
+    <span>Window threshold <b>{{ '%.3f'|format(r.threshold) }}</b></span>
+  </div>
+
+  {% if r.in_sample %}
+  <div class="banner">This recording was part of the training data, so the result below is <b>in-sample</b>. Held-out performance is on the <a href="/results">Results</a> page.</div>
+  {% endif %}
+
+  {% if r.per_session and r.valsalva_is_highest is not none %}
+    {% set v = r.per_session.get(3) %}
+    {% set others = r.present | reject('equalto', 3) | list %}
+    <div class="verdict {{ 'ok' if r.valsalva_is_highest else 'warn' }}">
+      {% if r.valsalva_is_highest %}
+        <b>Valsalva session recognised.</b> {{ v.pct_flagged }}% of its windows are flagged Valsalva-like.
+        Share flagged in the other sessions: {% for s in others %}{{ r.per_session[s].name }} {{ r.per_session[s].pct_flagged }}%{{ ', ' if not loop.last }}{% endfor %}.
+      {% else %}
+        <b>The Valsalva session is not the highest-scoring session in this recording.</b> Highest: {{ names[r.highest_session] }}.
+      {% endif %}
+      {% if r.ladder_monotone is defined %}<br>ICP-ordered ladder (head-up &lt; supine &lt; head-down &lt; Valsalva): <b>{{ 'holds' if r.ladder_monotone else 'does not hold' }}</b>.{% endif %}
+    </div>
+  {% else %}
+    <div class="verdict warn"><b>{{ r.pct_flagged_overall }}%</b> of windows are flagged Valsalva-like. This file has no session labels (or too few sessions), so the per-session view is unavailable.</div>
+  {% endif %}
+
+  <div class="card plain"><img class="plot" src="data:image/png;base64,{{ plot }}" alt="Valsalva-like score over the recording and per-session flagged share"></div>
+
+  {% if r.per_session %}
+  <div class="card plain">
+    <h2>By session (ascending expected ICP)</h2>
+    <table>
+      <tr><th>Session</th><th class="num">Windows</th><th class="num">Flagged Valsalva-like</th><th class="num">Valsalva score</th><th class="num">Ladder score</th></tr>
+      {% for s in r.present %}
+      <tr><td>{{ r.per_session[s].name }}</td><td class="num">{{ r.per_session[s].n }}</td><td class="num">{{ r.per_session[s].pct_flagged }}%</td>
+          <td class="num">{{ '%.3f'|format(r.per_session[s].mean_valsalva) }}</td><td class="num">{{ '%.3f'|format(r.per_session[s].mean_ladder) }}</td></tr>
+      {% endfor %}
+    </table>
+    <p class="note">Valsalva score: model output for the Valsalva-vs-rest head. Ladder score: output for the head separating head-down and Valsalva from supine and head-up.</p>
+  </div>
+  {% endif %}
+  <p><a href="/">Analyse another recording</a></p>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Analyse{% endblock %}
+{% block content %}
+<h1>Analyse a recording</h1>
+<p class="sub">Upload a hardware recording and see which parts the model recognises as Valsalva-like, and how the four sessions rank.</p>
+
+<div class="banner"><b>Scope:</b> the model recognises the recorded <b>state</b> (Valsalva, posture) from optical features. It does <b>not</b> measure ICP,
+  is <b>not</b> calibrated to mmHg, and is <b>not</b> a diagnosis.</div>
+
+{% if not ready %}
+<div class="err"><b>Model not trained yet.</b> Run <code>python -m pran.hardware_model</code> once (needs the recordings in <code>hw-tests/</code>), then reload this page.</div>
+{% endif %}
+
+<div class="card">
+  <form method="post" action="/analyze" enctype="multipart/form-data">
+    <label class="drop">
+      <b>Upload a recording (.csv)</b><br>
+      <span class="note">Needs columns <code>ir_raw</code>, <code>disp_raw</code>, <code>red_raw</code>, <code>artifact_flag</code>, and <code>session_label</code> for the per-session view.</span><br><br>
+      <input type="file" name="file" accept=".csv" required>
+    </label>
+    <button type="submit" {{ 'disabled' if not ready }}>Analyse recording</button>
+  </form>
+</div>
+
+{% if examples %}
+<div class="card plain">
+  <h2>Bundled study recordings</h2>
+  <p class="note">These were part of the training data, so results on them are in-sample. Held-out performance is on the <a href="/results">Results</a> page.</p>
+  <table>
+    {% for e in examples %}
+    <tr>
+      <td>{{ e }}</td>
+      <td class="num">
+        <form method="post" action="/analyze" style="margin:0">
+          <input type="hidden" name="example" value="{{ e }}">
+          <button class="small" type="submit" {{ 'disabled' if not ready }}>Analyse</button>
+        </form>
+      </td>
+    </tr>
+    {% endfor %}
+  </table>
+</div>
+{% endif %}
+{% endblock %}

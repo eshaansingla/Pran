@@ -1,6 +1,8 @@
-# Hardware results (146 subjects)
+# Hardware results (146 subjects): model-free baseline analysis
 
-![Hardware results](assets/hardware_results.png)
+> This page covers the simple, model-free analysis of one feature (`slow_wave_power`) against each subject's own supine baseline. The final hardware model (32 optical features, AUC 0.995 on unseen subjects) and its validity checks are in the README and on the app's Results page.
+
+![Hardware results](../assets/hardware_results.png)
 
 **Scope.** This is a *within-subject* response study of the optical eardrum sensor. Every number below compares a person with their **own supine baseline**. It does not measure or predict absolute ICP, it is not calibrated to mmHg, and it does not detect abnormal ICP. Manoeuvre order was fixed (supine → head-up → head-down → Valsalva) and there is no reference ICP measurement.
 

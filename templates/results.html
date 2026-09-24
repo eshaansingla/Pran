@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}Results{% endblock %}
+{% block content %}
+<h1>Results</h1>
+<p class="sub">Every number here comes from unseen subjects or patients (no person appears in both training and testing). Scope: state recognition, not ICP measurement.</p>
+
+<h2 style="margin-top:26px">1. Hardware model: Valsalva recognition</h2>
+{% if meta %}
+<p class="note">Valsalva windows = abnormal, all other windows = normal. {{ meta.n_subjects }} subjects, {{ '{:,}'.format(meta.n_windows) }} windows, {{ meta.n_features }} optical features, subject-grouped 13-fold cross-validation, thresholds chosen on separate validation subjects.</p>
+<div class="grid">
+  <div class="stat"><div class="big">{{ '%.3f'|format(meta.valsalva_window.auc) }}</div><div class="lab">AUC, single 10 s window</div></div>
+  <div class="stat"><div class="big">{{ '%.3f'|format(meta.valsalva_window.f1) }}</div><div class="lab">F1 (sensitivity {{ '%.3f'|format(meta.valsalva_window.sensitivity) }}, precision {{ '%.3f'|format(meta.valsalva_window.precision) }})</div></div>
+  <div class="stat"><div class="big">{{ meta.valsalva_session_level.highest_of_4_sessions }}</div><div class="lab">subjects: Valsalva is the highest-scoring of the 4 sessions</div></div>
+  <div class="stat"><div class="big">{{ meta.ladder.strictly_monotone }}</div><div class="lab">subjects: head-up &lt; supine &lt; head-down &lt; Valsalva</div></div>
+</div>
+<div class="card plain" style="margin-top:16px">
+  <table>
+    <tr><th>Metric</th><th class="num">Single window (10 s)</th><th class="num">Trailing 35 s average</th></tr>
+    {% for label, key in [('AUC','auc'),('Average precision','avg_precision'),('Sensitivity','sensitivity'),('Specificity','specificity'),('Precision','precision'),('F1','f1'),('Balanced accuracy','balanced_accuracy'),('Accuracy','accuracy')] %}
+    <tr><td>{{ label }}</td><td class="num">{{ '%.3f'|format(meta.valsalva_window[key]) }}</td><td class="num">{{ '%.3f'|format(meta.valsalva_trailing[key]) }}</td></tr>
+    {% endfor %}
+    <tr><td>Chance / always-normal reference</td><td class="num" colspan="2">avg precision {{ '%.3f'|format(meta.valsalva_window.avg_precision_chance) }}, accuracy {{ '%.3f'|format(meta.valsalva_window.accuracy_always_negative) }}</td></tr>
+    <tr><td>Within-subject AUC / Valsalva vs supine AUC</td><td class="num" colspan="2">{{ '%.3f'|format(meta.valsalva_within_subject_auc) }} / {{ '%.3f'|format(meta.valsalva_vs_supine_auc) }}</td></tr>
+    <tr><td>Whole-session AUC (Valsalva session vs other sessions)</td><td class="num" colspan="2">{{ '%.3f'|format(meta.valsalva_session_level.auc) }}</td></tr>
+    <tr><td>Ladder head: AUC, within-subject Spearman, head-up below supine</td><td class="num" colspan="2">{{ '%.3f'|format(meta.ladder.window_auc) }}, {{ '%.3f'|format(meta.ladder.mean_within_subject_spearman) }}, {{ meta.ladder.head_up_below_supine }}</td></tr>
+  </table>
+</div>
+{% else %}
+<div class="err">No trained hardware model found. Run <code>python -m pran.hardware_model</code>.</div>
+{% endif %}
+
+<h3 style="margin:22px 0 8px">Checks that could have broken it</h3>
+<div class="card plain"><table>
+  <tr><th>Check</th><th>Result</th></tr>
+  {% for a, b in validity %}<tr><td>{{ a }}</td><td>{{ b }}</td></tr>{% endfor %}
+</table></div>
+<p class="note">Several model families give the same picture on identical folds (AUC / F1):
+  {% for n, a, f in families %}{{ n }} {{ a }} / {{ f }}{{ '; ' if not loop.last }}{% endfor %}.</p>
+<div class="banner"><b>What this does and does not show.</b> The model recognises the recorded state from IR, displacement and red channels. It cannot separate ICP from other
+  things that change with posture and straining (head angle, blood pressure, venous return): the IR and red channels alone each reach about 0.91, so systemic effects are part of the signal.
+  Manoeuvre order was fixed, there are no patients in the hardware data, and everything is one site and one device.</div>
+
+<h2 style="margin-top:30px">2. CHARIS-only model (public patient data)</h2>
+<p class="note">XGBoost trained on 13 patients with an invasive ICP probe; windows are abnormal when ICP was 20 mmHg or higher for more than 60% of the window. Tested leave-one-patient-out.</p>
+<div class="grid">
+  <div class="stat"><div class="big">0.961</div><div class="lab">AUC, original features (95% CI 0.924 to 0.985)</div></div>
+  <div class="stat"><div class="big warm">0.693</div><div class="lab">AUC after removing mean-level information (95% CI 0.626 to 0.756)</div></div>
+</div>
+<div class="card plain" style="margin-top:16px"><table>
+  <tr><th>Original model, held-out test patients</th><th class="num">Value</th></tr>
+  <tr><td>Recall / specificity</td><td class="num">{{ '%.3f'|format(charis.recall) if charis else '0.876' }} / {{ '%.3f'|format(charis.specificity) if charis else '0.956' }}</td></tr>
+  <tr><td>Precision / F1</td><td class="num">{{ '%.3f'|format(charis.precision) if charis else '0.743' }} / {{ '%.3f'|format(charis.f1) if charis else '0.804' }}</td></tr>
+  <tr><td>Random Forest / Logistic Regression / SVM (leave-one-patient-out)</td><td class="num">0.938 / 0.894 / 0.893</td></tr>
+  <tr><td>Detrended features: XGBoost / Random Forest / Logistic Regression</td><td class="num">0.693 / 0.689 / 0.668</td></tr>
+</table></div>
+<div class="banner"><b>Why two numbers.</b> The original features included the average pressure level, which also defines the label. With that removed the AUC is about 0.69, and XGBoost is not clearly better than simpler models.</div>
+
+<h2 style="margin-top:30px">3. Does the CHARIS model transfer to the hardware?</h2>
+<p class="note">No. Valsalva-vs-supine AUC on hardware windows after each alignment attempt (0.5 is chance). Two of five features change in opposite directions between the datasets, which rescaling cannot fix.</p>
+<div class="card plain"><table>
+  <tr><th>Alignment</th><th class="num">AUC</th></tr>
+  {% for a, b in transfer %}<tr><td>{{ a }}</td><td class="num">{{ b }}</td></tr>{% endfor %}
+</table></div>
+{% endblock %}
