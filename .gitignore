@@ -47,4 +47,10 @@ Thumbs.db
 # ── Node ─────────────────────────────────────────────────────────────────────
 node_modules/
 
+# ── support/ holds moved experiments and artefacts (see support/MANIFEST.md); not part of the showcase ──
+support/
+
+# ── Generated presentation ───────────────────────────────────────────────────
+*.pptx
+
 # NOTE: assets/ IS tracked (README showcase figures). paper/ stays local for now.
