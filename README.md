@@ -48,33 +48,6 @@ The hardware has **no invasive ground truth**, so any classifier "accuracy" on i
 
 ![Two-model dose–response](assets/two_model_dose_response.png)
 
----
-
-## Honest Assessment (for evaluators)
-
-We rate this project as we would defend it in a viva — separating what the numbers **prove** from what they **suggest**. Two distinct claims must not be conflated:
-
-| Claim | Status | Basis |
-|---|---|---|
-| **①** XGBoost on CHARIS detects raised ICP against **real invasive ground truth** | ✅ **Solid, publishable** | LOPO AUC **0.961** (95 % CI 0.924–0.985), F1 0.80, leakage-free, beats all baselines (DeLong *p* < 0.001) |
-| **②** The device tracks **within-subject** ICP modulation (zero-shot, label-free) | ✅ **Solid, with a stated caveat** | Postural-only ρ **+0.61** (drift-tested); biomarker anti-drift *p* < 10⁻⁴; Valsalva 146/146 (*p* ≈ 0). Fixed manoeuvre order means Valsalva ≠ pure ICP — disclosed in [§16.1.1](#1611-is-it-icp-or-just-sensor-drift-the-fixed-order-confound) |
-| **③** "We trained on healthy-only data and *detected* the abnormal subjects" | ⚠️ **Rigor check only — NOT validation** | The 7 flagged are the oldest in a median-age-21 cohort; unsupervised methods disagree; flagged subjects have **intact** ICP physiology (see [§16.8](#168-unsupervised-internal-consistency-check-anomaly-detection)) |
-
-**Rating (UG capstone):**
-
-| Dimension | Score | Note |
-|---|---|---|
-| Idea / novelty | **8 / 10** | Non-invasive optical TM ICP sensor — the genuine USP |
-| Hardware + data collection | **8 / 10** | 146 subjects, structured provocation protocol — self-collected, non-trivial |
-| ML rigor (CHARIS model) | **7.5 / 10** | Real-ground-truth AUC 0.961; LOPO, baselines, ablation, calibration |
-| Device / cross-domain validation | **6 / 10** | Zero-shot dose–response is real; no abnormal ground truth, age confound unresolved |
-| Honesty / self-critique | **9 / 10** | Circularity, confounds and negative results reported rather than hidden |
-| **Overall** | **7.5 / 10** | Strong, honest capstone. **Conference / workshop publishable** with this framing; **not** a clinical-journal claim |
-
-**What would move validation 6 → 8:** randomised session order (removes the fixed-order drift confound) + a small **age-matched elderly control** or genuine raised-ICP cohort so the "abnormal" class is pathology, not age.
-
----
-
 ## Table of Contents
 
 1. [Problem Statement](#1-problem-statement)
