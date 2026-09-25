@@ -1,0 +1,2 @@
+Pre-declared rule: highest pooled out-of-fold AUC on the development subjects.
+Best: XGBoost

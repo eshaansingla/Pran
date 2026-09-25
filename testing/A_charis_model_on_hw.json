@@ -1,0 +1,21 @@
+{
+ "n_subjects": 146,
+ "n_windows": 46407,
+ "charis_threshold": 0.4364057183265686,
+ "pooled_auc_valsalva_vs_rest": 0.6481817446114151,
+ "pooled_auc_valsalva_vs_supine": 0.6495389172216318,
+ "mean_within_subject_auc_vs_rest": 0.6591212781882688,
+ "median_within_subject_auc_vs_rest": 0.6626635241777448,
+ "subjects_valsalva_mean_score_above_supine": "146/146",
+ "sensitivity": 0.09611540801251413,
+ "specificity": 0.9805730659025788,
+ "flagged_pct_by_session": {
+  "supine": 1.8864669005578882,
+  "head-up": 1.7822460870558665,
+  "head-down": 2.214611872146119,
+  "valsalva": 9.611540801251413
+ },
+ "flagged_pct_age_over_65": 23.845405930967427,
+ "flagged_pct_age_under_30": 1.4254769058765984,
+ "age_confound_check_auc_over65_vs_under30": 0.8147693349421984
+}

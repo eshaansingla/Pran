@@ -1,0 +1,18 @@
+{
+ "model": "XGBoost, 5 base features, trained on hardware Valsalva-vs-rest (subjects only)",
+ "hw_threshold": 0.5000455379486084,
+ "boosting_rounds": 130,
+ "hw_own_heldout_auc": 0.7118257728080465,
+ "charis_windows": 228895,
+ "charis_patients": 13,
+ "charis_pct_elevated": 33.108630594814215,
+ "pooled_auc": 0.4078109282543009,
+ "mean_per_patient_auc": 0.5581390969395508,
+ "median_per_patient_auc": 0.5903950218608072,
+ "worst_patient_auc": 0.3339058195151544,
+ "patients_auc_above_0_5": "9/13",
+ "patients_auc_below_0_5": 4,
+ "sensitivity": 0.19617597382033147,
+ "specificity": 0.7966312021997113,
+ "balanced_accuracy": 0.4964035880100214
+}

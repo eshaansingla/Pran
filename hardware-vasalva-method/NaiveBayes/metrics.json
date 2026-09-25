@@ -1,0 +1,71 @@
+{
+ "model": "NaiveBayes",
+ "task": "Valsalva windows = abnormal (1), all other windows = normal (0)",
+ "n_dev_subjects": 117,
+ "n_test_subjects": 29,
+ "n_features": 32,
+ "dev_cv": {
+  "auc": 0.954681062522027,
+  "avg_precision": 0.8568169603966417,
+  "avg_precision_chance": 0.24792943960417338,
+  "sensitivity": 0.9163774403470716,
+  "specificity": 0.8688858695652174,
+  "precision": 0.6973423572136018,
+  "f1": 0.791994750656168,
+  "balanced_accuracy": 0.8926316549561445,
+  "accuracy": 0.8806604280950845,
+  "accuracy_always_normal": 0.7520705603958266,
+  "mcc": 0.7234980257443093,
+  "TP": 8449,
+  "FP": 3667,
+  "FN": 771,
+  "TN": 24301,
+  "auc_ci95_subject_bootstrap": [
+   0.942590234704551,
+   0.9658395195773963
+  ],
+  "fold_auc_mean": 0.9574681258156126,
+  "fold_auc_std": 0.02329978011825067,
+  "within_subject_auc_mean": 0.9823596068679977,
+  "valsalva_session_highest_of_4": "117/117"
+ },
+ "final_test": {
+  "auc": 0.960265831788142,
+  "avg_precision": 0.8951480268953821,
+  "avg_precision_chance": 0.24807462848465126,
+  "sensitivity": 0.8460865763008307,
+  "specificity": 0.9280150028851702,
+  "precision": 0.794987674609696,
+  "f1": 0.8197415801736919,
+  "balanced_accuracy": 0.8870507895930004,
+  "accuracy": 0.9076906388979282,
+  "accuracy_always_normal": 0.7519253715153488,
+  "mcc": 0.7584467589378947,
+  "TP": 1935,
+  "FP": 499,
+  "FN": 352,
+  "TN": 6433,
+  "auc_ci95_subject_bootstrap": [
+   0.9420939583635076,
+   0.9768286378008076
+  ],
+  "threshold": 0.5365890100631316,
+  "within_subject_auc_mean": 0.9836585973696763,
+  "valsalva_session_highest_of_4": "29/29"
+ },
+ "overfit_check": {
+  "train_auc_mean": 0.9576429363680268,
+  "heldout_auc_mean": 0.9574681258156126,
+  "gap": 0.00017481055241419519,
+  "verdict": "ok",
+  "rule": "overfit if train-heldout AUC gap > 0.05; underfit if held-out fold AUC < 0.80"
+ },
+ "protocol": {
+  "cv": "10-fold subject-grouped on development subjects",
+  "scaler": "QuantileTransformer fit on fitting subjects only",
+  "threshold": "Youden on 14 separate validation subjects",
+  "early_stopping": "validation subjects (boosters only)",
+  "final_test": "scored once, never used for choices"
+ },
+ "minutes": 0.14439473946889242
+}

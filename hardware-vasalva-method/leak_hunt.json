@@ -1,0 +1,56 @@
+{
+ "duplicate_check": {
+  "n_files": 146,
+  "largest_shared_run_counts": [],
+  "pairs_with_>=20_shared": 0
+ },
+ "id_block_holdout": [
+  {
+   "n_test_subjects": 30,
+   "auc": 0.9889195658454046,
+   "sensitivity": 0.9843485617597293,
+   "specificity": 0.9013240418118467,
+   "subject_numbers": "1-30"
+  },
+  {
+   "n_test_subjects": 29,
+   "auc": 0.9901801262189036,
+   "sensitivity": 0.8991706678306416,
+   "specificity": 0.9802337325061319,
+   "subject_numbers": "31-59"
+  },
+  {
+   "n_test_subjects": 29,
+   "auc": 0.9957907968627943,
+   "sensitivity": 0.9741681260945709,
+   "specificity": 0.9632140796306982,
+   "subject_numbers": "60-88"
+  },
+  {
+   "n_test_subjects": 29,
+   "auc": 0.9892952211382949,
+   "sensitivity": 0.9534883720930233,
+   "specificity": 0.9337757899293031,
+   "subject_numbers": "89-117"
+  },
+  {
+   "n_test_subjects": 29,
+   "auc": 0.9976454547064715,
+   "sensitivity": 0.9759720401922237,
+   "specificity": 0.9815322464290868,
+   "subject_numbers": "118-147"
+  }
+ ],
+ "early_to_late": {
+  "n_test_subjects": 73,
+  "auc": 0.9919582984826236,
+  "sensitivity": 0.9500522102332057,
+  "specificity": 0.9601673544245759
+ },
+ "late_to_early": {
+  "n_test_subjects": 73,
+  "auc": 0.9896629207046058,
+  "sensitivity": 0.9541746224613782,
+  "specificity": 0.9453357781343112
+ }
+}

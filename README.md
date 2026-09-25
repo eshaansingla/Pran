@@ -14,7 +14,7 @@
 | Sensor | ESP32 + infrared optical sensor (MAX30105) + 16-bit ADC (ADS1115) + motion sensor (MPU6050), 50 Hz |
 | Public data | **CHARIS** (PhysioNet): 13 brain-injury patients with an invasive ICP probe, 915,137 windows |
 | **Hardware model** | XGBoost on 32 optical features. Valsalva recognition on **unseen subjects**: **AUC 0.995**, sensitivity 0.964, specificity 0.960, precision 0.888, F1 0.925 |
-| **CHARIS-only model** | XGBoost. Leave-one-patient-out **AUC 0.961** (95% CI 0.924 to 0.985) with the original features; **0.693** (0.626 to 0.756) after removing mean-level information |
+| **CHARIS-only model** | XGBoost on 5 waveform features. Re-evaluation in progress; results will be reported when finished |
 | Transfer CHARIS to hardware | **No.** Five alignment attempts, Valsalva-vs-supine AUC 0.53 to 0.66 |
 
 ## Results
@@ -56,14 +56,7 @@ A simple model-free view agrees ([details](docs/HARDWARE_RESULTS.md)): compared 
 ![Hardware results](assets/hardware_results.png)
 
 ### 2. CHARIS-only model (public data)
-| | |
-|---|---|
-| Original features, leave-one-patient-out AUC | **0.961** (95% CI 0.924 to 0.985) |
-| Held-out test patients | AUC 0.979, recall 0.876, specificity 0.956, precision 0.743, F1 0.804 |
-| Baselines (leave-one-patient-out) | Random Forest 0.938, Logistic Regression 0.894, SVM 0.893 |
-| **After removing mean-level information** | **0.693** (0.626 to 0.756); Random Forest 0.689, Logistic Regression 0.668 |
-
-**Why two numbers.** In the original features the wavelet energy ratios were computed on windows that still contained the average pressure level, which also defines the label. With that removed the AUC is about 0.69 and XGBoost is not clearly better than simpler models. Both are reported.
+Re-evaluation in progress. Results will be added when it is finished.
 
 ### 3. Does the CHARIS model transfer to the hardware?
 No. Valsalva-vs-supine AUC on hardware windows (0.5 is chance): as first built 0.656, unit-free features 0.648, per-subject rank alignment 0.587, rank alignment 0.572, unit change 0.560, joint distribution mapping 0.529. Two of the five features change in opposite directions between the datasets, which rescaling cannot fix. A combined (hybrid) model does no better than the hardware model alone.

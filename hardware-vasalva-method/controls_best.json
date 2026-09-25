@@ -1,0 +1,76 @@
+{
+ "model": "XGBoost",
+ "reference_dev_auc": 0.9943565248260173,
+ "label_shuffle_auc": 0.5007375488317606,
+ "learning_curve": {
+  "8": 0.9603805786563635,
+  "16": 0.9817954928812352,
+  "32": 0.9888229191744393,
+  "64": 0.9941674995315379,
+  "92": 0.9943565248260173
+ },
+ "feature_groups": {
+  "all 32 features": 0.9943565248260173,
+  "5 CHARIS-style base only": 0.7029868656834958,
+  "IR channel only (9)": 0.978589316671796,
+  "displacement channel only (9)": 0.959272341616325,
+  "red channel only (9)": 0.9764810755986388,
+  "IR + red (18)": 0.977611432743712,
+  "no base features (27)": 0.9938830153581162
+ },
+ "position_only_auc": 0.9999946386666881,
+ "drift_supine_early_vs_late_auc_mean": 0.5028595860093036,
+ "drift_supine_early_vs_late_auc_sd": 0.05965041311298471,
+ "session_pair_auc": {
+  "Valsalva vs supine (development)": 0.998435445946356,
+  "Valsalva vs supine (final_test)": 0.9985985577203206,
+  "Valsalva vs head-up (development)": 0.999621650897481,
+  "Valsalva vs head-up (final_test)": 0.9997690595017313,
+  "Valsalva vs head-down (development)": 0.9809998161435256,
+  "Valsalva vs head-down (final_test)": 0.9836580070262202
+ },
+ "by_age": [
+  {
+   "band": "<=18",
+   "subjects": 11,
+   "pooled_auc": 0.9592353325591646,
+   "within_subject_auc": 0.9654342268080949
+  },
+  {
+   "band": "19-25",
+   "subjects": 74,
+   "pooled_auc": 0.9988255585506672,
+   "within_subject_auc": 0.9993615865083875
+  },
+  {
+   "band": "26-45",
+   "subjects": 30,
+   "pooled_auc": 0.9955480229978403,
+   "within_subject_auc": 0.9973853785992973
+  },
+  {
+   "band": "46-64",
+   "subjects": 17,
+   "pooled_auc": 0.997345418861233,
+   "within_subject_auc": 0.9982918561399262
+  },
+  {
+   "band": "65+",
+   "subjects": 14,
+   "pooled_auc": 0.9728205279773409,
+   "within_subject_auc": 0.9894194311668655
+  }
+ ],
+ "by_sex": [
+  {
+   "sex": "F",
+   "subjects": 39,
+   "pooled_auc": 0.9889019196022454
+  },
+  {
+   "sex": "M",
+   "subjects": 107,
+   "pooled_auc": 0.9962323396663987
+  }
+ ]
+}
