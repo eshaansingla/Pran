@@ -1,0 +1,22 @@
+{
+  "features": [
+    "cardiac_amplitude",
+    "cardiac_frequency",
+    "respiratory_amplitude",
+    "slow_wave_power",
+    "cardiac_power"
+  ],
+  "threshold": 0.5409398674964905,
+  "fit_auc_in_sample": 0.9780659227078495,
+  "lopo_mean_auc_intact": 0.9200214603177237,
+  "lopo_mean_auc_demeaned": 0.8645733902938377,
+  "lopo_mean_sensitivity": 0.7780297374977617,
+  "lopo_mean_specificity": 0.9017584417148362,
+  "unreliable_patient": 5,
+  "unreliable_patient_note": "AUC 0.856 intact -> 0.379 de-meaned: baseline-level artifact",
+  "domain_classifier_auc_raw": 1.0,
+  "domain_classifier_auc_marginal_qt": 0.9221656307633825,
+  "domain_classifier_auc_after_coral": 0.873390297727671,
+  "domain_classifier_note": "structural ceiling: CHARIS features derive from 1 channel, hardware from 2 independent sensors",
+  "trained_on": "13 CHARIS patients (features+real labels); hardware used only unsupervised as CORAL target"
+}

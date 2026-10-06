@@ -54,3 +54,5 @@ support/
 *.pptx
 
 # NOTE: assets/ IS tracked (README showcase figures). paper/ stays local for now.
+hw_data/
+charis_data/
